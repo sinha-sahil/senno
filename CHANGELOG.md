@@ -2,6 +2,13 @@
 
 All notable changes to senno are documented here.
 
+
+## [0.2.0] - 2026-08-13
+
+### Features
+
+- Initial extraction of llm, agent and vertex modules from arche (f3a2582)
+
 ## [0.1.0] - 2026-08-14
 
 Initial release — extracted from [arche](https://github.com/sinha-sahil/arche)
