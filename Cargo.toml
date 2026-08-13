@@ -1,0 +1,60 @@
+[package]
+name = "senno"
+version = "0.1.0"
+edition = "2024"
+description = "Wits for your backend: provider-agnostic LLM client and streaming tool-calling agent engine, Vertex AI first (Gemini + Claude on Vertex), with built-in history compaction."
+authors = ["Sahil Sinha"]
+repository = "https://github.com/sinha-sahil/senno"
+homepage = "https://github.com/sinha-sahil/senno"
+documentation = "https://docs.rs/senno"
+license = "MIT"
+keywords = ["llm", "agent", "vertex-ai", "gemini", "ai"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+exclude = [
+    ".cargo-husky/*",
+    ".editorconfig",
+    ".gitattributes",
+    ".github/*",
+    ".gitignore",
+    ".vscode/*",
+    "cliff.toml",
+    "plans/*",
+]
+
+[features]
+default = []
+vertex = ["dep:reqwest", "dep:jsonwebtoken", "dep:nanoid", "dep:tokio"]
+axum = ["dep:axum"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+tracing = "0.1"
+futures = "0.3"
+async-stream = "0.3"
+indexmap = { version = "2", features = ["serde"] }
+time = { version = "0.3.44", features = ["formatting"] }
+
+reqwest = { version = "0.12", features = ["stream", "json"], optional = true }
+jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"], optional = true }
+nanoid = { version = "0.4.0", optional = true }
+tokio = { version = "1.4.0", features = ["sync", "time", "fs"], optional = true }
+axum = { version = "0.8.7", optional = true }
+
+[dev-dependencies]
+cargo-husky = { version = "1", features = ["user-hooks"] }
+tokio = { version = "1.4.0", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "fs",
+] }
+
+[package.metadata.docs.rs]
+all-features = true

@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target
+target/
+**/*.rs.bk
+*.pdb
+debug/
+
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local secrets (API keys, service-account experiments)
+.env
+.env.*
+
+# Release pipeline artifacts (git-cliff outputs; must not dirty cargo publish)
+RELEASE_NOTES.md
+git-cliff/
