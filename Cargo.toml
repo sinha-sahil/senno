@@ -20,11 +20,13 @@ exclude = [
     ".vscode/*",
     "cliff.toml",
     "plans/*",
+    "tests/*",
 ]
 
 [features]
 default = []
-vertex = ["dep:reqwest", "dep:jsonwebtoken", "dep:nanoid", "dep:tokio"]
+batch = ["dep:tokio"]
+vertex = ["dep:reqwest", "dep:jsonwebtoken", "dep:nanoid", "dep:tokio", "batch"]
 axum = ["dep:axum"]
 
 [dependencies]

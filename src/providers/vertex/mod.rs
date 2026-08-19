@@ -1,6 +1,8 @@
 mod anthropic;
+mod batch;
 mod client;
 mod config;
+mod embed;
 mod env;
 mod gemini;
 mod token;
@@ -21,6 +23,7 @@ pub async fn get_vertex_client(
         .connect_timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| Error::internal(format!("Failed to build Vertex HTTP client: {e}")))?;
+    let base_url = config.as_ref().and_then(|c| c.base_url.clone());
     let auth = config::resolve_auth(config, http.clone()).await?;
-    Ok(VertexClient::new(http, auth, provider))
+    Ok(VertexClient::new(http, auth, provider, base_url))
 }

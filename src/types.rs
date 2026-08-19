@@ -247,6 +247,137 @@ pub enum StreamChunk {
     },
 }
 
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct EmbedRequest {
+    pub model: String,
+    pub texts: Vec<String>,
+    pub task_type: Option<EmbedTaskType>,
+    pub output_dimensionality: Option<u32>,
+    pub title: Option<String>,
+}
+
+impl EmbedRequest {
+    pub fn new(
+        model: impl Into<String>,
+        texts: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            texts: texts.into_iter().map(|t| t.into()).collect(),
+            task_type: None,
+            output_dimensionality: None,
+            title: None,
+        }
+    }
+
+    pub fn single(model: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::new(model, [text.into()])
+    }
+
+    pub fn with_task_type(mut self, v: EmbedTaskType) -> Self {
+        self.task_type = Some(v);
+        self
+    }
+
+    pub fn with_output_dimensionality(mut self, v: u32) -> Self {
+        self.output_dimensionality = Some(v);
+        self
+    }
+
+    pub fn with_title(mut self, v: impl Into<String>) -> Self {
+        self.title = Some(v.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum EmbedTaskType {
+    RetrievalQuery,
+    RetrievalDocument,
+    SemanticSimilarity,
+    Classification,
+    Clustering,
+    QuestionAnswering,
+    FactVerification,
+    CodeRetrievalQuery,
+}
+
+impl EmbedTaskType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RetrievalQuery => "RETRIEVAL_QUERY",
+            Self::RetrievalDocument => "RETRIEVAL_DOCUMENT",
+            Self::SemanticSimilarity => "SEMANTIC_SIMILARITY",
+            Self::Classification => "CLASSIFICATION",
+            Self::Clustering => "CLUSTERING",
+            Self::QuestionAnswering => "QUESTION_ANSWERING",
+            Self::FactVerification => "FACT_VERIFICATION",
+            Self::CodeRetrievalQuery => "CODE_RETRIEVAL_QUERY",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbedResponse {
+    pub embeddings: Vec<Result<Embedding, crate::error::Error>>,
+    pub total_token_count: Option<u32>,
+}
+
+impl EmbedResponse {
+    pub fn into_embeddings(self) -> Result<Vec<Embedding>, crate::error::Error> {
+        self.embeddings.into_iter().collect()
+    }
+
+    pub fn failures(&self) -> impl Iterator<Item = (usize, &crate::error::Error)> {
+        self.embeddings
+            .iter()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|error| (index, error)))
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.embeddings.iter().all(Result::is_ok)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Embedding {
+    pub values: Vec<f32>,
+    pub token_count: Option<u32>,
+    pub truncated: Option<bool>,
+}
+
+#[derive(Debug)]
+pub struct BatchJob<T> {
+    pub name: String,
+    pub state: BatchState,
+    pub responses: Vec<Result<T, crate::error::Error>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BatchState {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    Expired,
+    Unknown,
+}
+
+impl BatchState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Expired
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
@@ -639,5 +770,117 @@ mod tests {
         assert!(a.destructive.is_none());
         assert!(a.idempotent.is_none());
         assert!(a.open_world.is_none());
+    }
+
+    #[test]
+    fn embed_request_defaults_are_empty_and_builders_chain() {
+        let req = EmbedRequest::new("gemini-embedding-001", ["a", "b"]);
+        assert_eq!(req.texts, vec!["a", "b"]);
+        assert!(req.task_type.is_none());
+        assert!(req.output_dimensionality.is_none());
+        assert!(req.title.is_none());
+
+        let req = req
+            .with_task_type(EmbedTaskType::RetrievalDocument)
+            .with_output_dimensionality(768)
+            .with_title("Doc");
+        assert_eq!(req.task_type, Some(EmbedTaskType::RetrievalDocument));
+        assert_eq!(req.output_dimensionality, Some(768));
+        assert_eq!(req.title.as_deref(), Some("Doc"));
+    }
+
+    #[test]
+    fn embed_request_single_wraps_one_text() {
+        let req = EmbedRequest::single("m", "hello");
+        assert_eq!(req.texts, vec!["hello"]);
+    }
+
+    #[test]
+    fn batch_state_terminal_covers_every_finished_state() {
+        assert!(BatchState::Succeeded.is_terminal());
+        assert!(BatchState::Failed.is_terminal());
+        assert!(BatchState::Cancelled.is_terminal());
+        assert!(BatchState::Expired.is_terminal());
+        assert!(!BatchState::Pending.is_terminal());
+        assert!(!BatchState::Running.is_terminal());
+        assert!(!BatchState::Unknown.is_terminal());
+    }
+
+    #[test]
+    fn embed_task_type_serializes_to_api_strings() {
+        assert_eq!(EmbedTaskType::RetrievalQuery.as_str(), "RETRIEVAL_QUERY");
+        assert_eq!(
+            EmbedTaskType::CodeRetrievalQuery.as_str(),
+            "CODE_RETRIEVAL_QUERY"
+        );
+        assert_eq!(
+            EmbedTaskType::SemanticSimilarity.as_str(),
+            "SEMANTIC_SIMILARITY"
+        );
+    }
+
+    #[test]
+    fn embed_task_type_serde_round_trips_through_the_same_api_strings() {
+        for task in [
+            EmbedTaskType::RetrievalQuery,
+            EmbedTaskType::RetrievalDocument,
+            EmbedTaskType::SemanticSimilarity,
+            EmbedTaskType::Classification,
+            EmbedTaskType::Clustering,
+            EmbedTaskType::QuestionAnswering,
+            EmbedTaskType::FactVerification,
+            EmbedTaskType::CodeRetrievalQuery,
+        ] {
+            let json = serde_json::to_value(task).unwrap();
+            assert_eq!(json, serde_json::json!(task.as_str()), "{task:?}");
+            assert_eq!(
+                serde_json::from_value::<EmbedTaskType>(json).unwrap(),
+                task,
+                "{task:?}"
+            );
+        }
+    }
+
+    fn embedding(value: f32) -> Embedding {
+        Embedding {
+            values: vec![value],
+            token_count: None,
+            truncated: None,
+        }
+    }
+
+    #[test]
+    fn embed_response_pins_each_failure_to_the_index_of_its_input() {
+        let response = EmbedResponse {
+            embeddings: vec![
+                Ok(embedding(1.0)),
+                Err(crate::error::Error::provider("vertex-ai", "429")),
+                Ok(embedding(3.0)),
+            ],
+            total_token_count: Some(9),
+        };
+
+        assert!(!response.is_complete());
+        let failures: Vec<usize> = response.failures().map(|(index, _)| index).collect();
+        assert_eq!(failures, vec![1]);
+        assert!(response.into_embeddings().is_err());
+    }
+
+    #[test]
+    fn a_complete_embed_response_unwraps_to_every_embedding_in_order() {
+        let response = EmbedResponse {
+            embeddings: vec![Ok(embedding(1.0)), Ok(embedding(2.0))],
+            total_token_count: None,
+        };
+
+        assert!(response.is_complete());
+        assert_eq!(response.failures().count(), 0);
+        let values: Vec<f32> = response
+            .into_embeddings()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.values[0])
+            .collect();
+        assert_eq!(values, vec![1.0, 2.0]);
     }
 }

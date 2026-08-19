@@ -4,7 +4,7 @@ use crate::types::{
 };
 
 use super::client::VertexClient;
-use super::config::ResolvedAuth;
+use super::config::{ResolvedAuth, regional_host};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
@@ -189,11 +189,7 @@ fn endpoint(auth: &ResolvedAuth, model: &str, stream: bool) -> Result<String, Er
         ResolvedAuth::ServiceAccount {
             project_id, region, ..
         } => {
-            let host = if region == "global" {
-                "aiplatform.googleapis.com".to_string()
-            } else {
-                format!("{region}-aiplatform.googleapis.com")
-            };
+            let host = regional_host(region);
             Ok(format!(
                 "https://{host}/v1/projects/{project_id}/locations/{region}/publishers/anthropic/models/{model}:{method}"
             ))
