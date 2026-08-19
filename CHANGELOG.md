@@ -3,6 +3,13 @@
 All notable changes to senno are documented here.
 
 
+## [0.4.0] - 2026-08-19
+
+### Features
+
+- Add token usage parameters to agent and providers (0c67cd8)
+
+
 ## [0.3.0] - 2026-08-19
 
 ### Features
