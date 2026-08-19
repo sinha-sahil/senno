@@ -2,14 +2,14 @@ use crate::error::Error;
 use crate::types::{ContentPart, GenerateRequest, GenerateResponse, Role, StreamChunk, Usage};
 
 use super::client::VertexClient;
-use super::config::ResolvedAuth;
+use super::config::{ResolvedAuth, regional_host};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Request {
+pub(super) struct Request {
     contents: Vec<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<Tool>>,
@@ -100,7 +100,7 @@ struct ThinkingConfig {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Response {
+pub(super) struct Response {
     candidates: Option<Vec<Candidate>>,
     usage_metadata: Option<UsageMeta>,
 }
@@ -173,11 +173,7 @@ fn endpoint(auth: &ResolvedAuth, model: &str, stream: bool) -> String {
         ResolvedAuth::ServiceAccount {
             project_id, region, ..
         } => {
-            let host = if region == "global" {
-                "aiplatform.googleapis.com".to_string()
-            } else {
-                format!("{region}-aiplatform.googleapis.com")
-            };
+            let host = regional_host(region);
             format!(
                 "https://{host}/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:{method}"
             )
@@ -185,7 +181,7 @@ fn endpoint(auth: &ResolvedAuth, model: &str, stream: bool) -> String {
     }
 }
 
-fn to_wire(req: &GenerateRequest) -> Request {
+pub(super) fn to_wire(req: &GenerateRequest) -> Request {
     let contents = req
         .messages
         .iter()
@@ -296,7 +292,7 @@ fn to_wire(req: &GenerateRequest) -> Request {
     }
 }
 
-fn from_wire(resp: Response) -> GenerateResponse {
+pub(super) fn from_wire(resp: Response) -> GenerateResponse {
     let mut content = Vec::new();
     let mut stop_reason = None;
 

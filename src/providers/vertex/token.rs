@@ -11,6 +11,7 @@ use crate::error::Error;
 const DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 const JWT_LIFETIME_SECS: u64 = 3600;
 const EXPIRY_SAFETY_MARGIN: Duration = Duration::from_secs(60);
+const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(JWT_LIFETIME_SECS);
 const TOKEN_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 const TOKEN_FETCH_MAX_ATTEMPTS: u32 = 2;
 const TOKEN_FETCH_RETRY_DELAY: Duration = Duration::from_millis(200);
@@ -389,11 +390,14 @@ fn sign_assertion(key: &ServiceAccountKey, scopes: &[&str]) -> Result<String, Er
 
 fn cached_with_safety_margin(token: TokenResponse) -> CachedToken {
     let lifetime = Duration::from_secs(token.expires_in)
+        .min(MAX_TOKEN_LIFETIME)
         .checked_sub(EXPIRY_SAFETY_MARGIN)
         .unwrap_or(Duration::ZERO);
     CachedToken {
         value: token.access_token,
-        expires_at: Instant::now() + lifetime,
+        expires_at: Instant::now()
+            .checked_add(lifetime)
+            .unwrap_or_else(Instant::now),
     }
 }
 
@@ -459,6 +463,16 @@ mod tests {
             body.len(),
             body
         )
+    }
+
+    #[test]
+    fn an_absurd_expires_in_cannot_overflow_the_deadline() {
+        let cached = cached_with_safety_margin(TokenResponse {
+            access_token: "t".into(),
+            expires_in: u64::MAX,
+        });
+
+        assert!(cached.expires_at <= Instant::now() + MAX_TOKEN_LIFETIME);
     }
 
     #[tokio::test]

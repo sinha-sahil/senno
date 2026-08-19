@@ -1,6 +1,6 @@
 /// The one error type senno returns. Hosts convert at the boundary
 /// (e.g. `impl From<senno::Error> for AppError`).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     /// An upstream service (model API, token endpoint) failed.
     #[error("{provider}: {detail}")]
