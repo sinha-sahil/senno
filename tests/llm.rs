@@ -120,6 +120,7 @@ fn usage() -> Usage {
         input_tokens: Some(10),
         output_tokens: Some(5),
         total_tokens: Some(15),
+        ..Usage::default()
     }
 }
 

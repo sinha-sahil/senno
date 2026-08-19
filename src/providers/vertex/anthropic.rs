@@ -75,17 +75,45 @@ struct Response {
 
 #[derive(Deserialize)]
 struct WireUsage {
-    input_tokens: u32,
-    output_tokens: u32,
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
 }
 
 impl From<WireUsage> for Usage {
     fn from(u: WireUsage) -> Self {
+        let input = sum_opt(
+            u.input_tokens,
+            sum_opt(u.cache_creation_input_tokens, u.cache_read_input_tokens),
+        );
         Usage {
-            input_tokens: Some(u.input_tokens),
-            output_tokens: Some(u.output_tokens),
-            total_tokens: Some(u.input_tokens.saturating_add(u.output_tokens)),
+            input_tokens: input,
+            cached_input_tokens: u.cache_read_input_tokens,
+            output_tokens: u.output_tokens,
+            reasoning_tokens: None,
+            total_tokens: sum_opt(input, u.output_tokens),
         }
+    }
+}
+
+fn sum_opt(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+    match (a, b) {
+        (None, None) => None,
+        _ => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
+    }
+}
+
+fn merge_usage(prev: Option<Usage>, next: Usage) -> Usage {
+    let Some(p) = prev else { return next };
+    let input_tokens = next.input_tokens.or(p.input_tokens);
+    let output_tokens = next.output_tokens.or(p.output_tokens);
+    Usage {
+        input_tokens,
+        cached_input_tokens: next.cached_input_tokens.or(p.cached_input_tokens),
+        output_tokens,
+        reasoning_tokens: None,
+        total_tokens: sum_opt(input_tokens, output_tokens),
     }
 }
 
@@ -318,8 +346,7 @@ fn parse_sse(
         let mut current_tool_name = String::new();
         let mut current_tool_json = String::new();
 
-        let mut input_usage: Option<u32> = None;
-        let mut output_usage: Option<u32> = None;
+        let mut usage: Option<Usage> = None;
         let mut done_sent = false;
 
         while let Some(chunk) = futures::StreamExt::next(&mut byte_stream).await {
@@ -350,8 +377,7 @@ fn parse_sse(
                             if let Some(m) = message
                                 && let Some(u) = m.usage
                             {
-                                input_usage = Some(u.input_tokens);
-                                output_usage = Some(u.output_tokens);
+                                usage = Some(merge_usage(usage.take(), u.into()));
                             }
                         }
                         StreamEvent::ContentBlockStart { content_block } => {
@@ -390,13 +416,12 @@ fn parse_sse(
                         }
                         StreamEvent::MessageDelta { delta } => {
                             if let Some(u) = delta.usage {
-                                input_usage = input_usage.or(Some(u.input_tokens));
-                                output_usage = Some(u.output_tokens);
+                                usage = Some(merge_usage(usage.take(), u.into()));
                             }
                             if !done_sent && let Some(reason) = delta.stop_reason {
                                 yield Ok(StreamChunk::Done {
                                     finish_reason: reason,
-                                    usage: final_usage(input_usage, output_usage),
+                                    usage: usage.clone(),
                                 });
                                 done_sent = true;
                             }
@@ -405,7 +430,7 @@ fn parse_sse(
                             if !done_sent {
                                 yield Ok(StreamChunk::Done {
                                     finish_reason: "end_turn".into(),
-                                    usage: final_usage(input_usage, output_usage),
+                                    usage: usage.clone(),
                                 });
                                 done_sent = true;
                             }
@@ -421,18 +446,6 @@ fn parse_sse(
     };
 
     Box::pin(stream)
-}
-
-fn final_usage(input: Option<u32>, output: Option<u32>) -> Option<Usage> {
-    if input.is_none() && output.is_none() {
-        return None;
-    }
-    let total_tokens = input.zip(output).map(|(a, b)| a.saturating_add(b));
-    Some(Usage {
-        input_tokens: input,
-        output_tokens: output,
-        total_tokens,
-    })
 }
 
 fn find_frame_boundary(buf: &[u8]) -> Option<(usize, usize)> {
@@ -454,6 +467,40 @@ fn find_frame_boundary(buf: &[u8]) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    fn sse_response(frames: &[&str]) -> reqwest::Response {
+        let body: String = frames.iter().map(|f| format!("data: {f}\n\n")).collect();
+        reqwest::Response::from(http::Response::new(body))
+    }
+
+    async fn done_usage(frames: &[&str]) -> Option<Usage> {
+        let mut stream = parse_sse(sse_response(frames));
+        let mut seen = Vec::new();
+        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            if let Ok(StreamChunk::Done { usage, .. }) = chunk {
+                seen.push(usage);
+            }
+        }
+        assert_eq!(seen.len(), 1, "exactly one Done per stream");
+        seen.remove(0)
+    }
+
+    #[tokio::test]
+    async fn stream_keeps_the_final_output_count_from_message_delta() {
+        let usage = done_usage(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":6,"cache_read_input_tokens":4,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","usage":{"output_tokens":42}}}"#,
+            r#"{"type":"message_stop"}"#,
+        ])
+        .await
+        .expect("Done carries usage");
+
+        assert_eq!(usage.output_tokens, Some(42));
+        assert_eq!(usage.input_tokens, Some(20));
+        assert_eq!(usage.cached_input_tokens, Some(4));
+        assert_eq!(usage.total_tokens, Some(62));
+    }
+
     use super::*;
 
     #[test]
@@ -494,16 +541,46 @@ mod tests {
     }
 
     #[test]
-    fn final_usage_none_when_both_missing() {
-        assert!(final_usage(None, None).is_none());
+    fn message_delta_usage_parses_without_input_tokens() {
+        let event: StreamEvent = serde_json::from_str(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","usage":{"output_tokens":5}}}"#,
+        )
+        .unwrap();
+        let StreamEvent::MessageDelta { delta } = event else {
+            panic!("expected message_delta")
+        };
+        let u: Usage = delta.usage.unwrap().into();
+        assert_eq!(u.output_tokens, Some(5));
+        assert_eq!(u.input_tokens, None);
     }
 
     #[test]
-    fn final_usage_sums_when_both_present() {
-        let u = final_usage(Some(10), Some(5)).unwrap();
-        assert_eq!(u.input_tokens, Some(10));
-        assert_eq!(u.output_tokens, Some(5));
-        assert_eq!(u.total_tokens, Some(15));
+    fn cache_buckets_fold_into_input_and_report_cache_reads() {
+        let u: Usage = serde_json::from_str::<WireUsage>(
+            r#"{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":7,"cache_read_input_tokens":3}"#,
+        )
+        .unwrap()
+        .into();
+        assert_eq!(u.input_tokens, Some(20));
+        assert_eq!(u.cached_input_tokens, Some(3));
+        assert_eq!(u.total_tokens, Some(25));
+    }
+
+    #[test]
+    fn merge_usage_keeps_input_from_message_start() {
+        let start = Usage {
+            input_tokens: Some(10),
+            output_tokens: Some(1),
+            ..Usage::default()
+        };
+        let delta = Usage {
+            output_tokens: Some(42),
+            ..Usage::default()
+        };
+        let merged = merge_usage(Some(start), delta);
+        assert_eq!(merged.input_tokens, Some(10));
+        assert_eq!(merged.output_tokens, Some(42));
+        assert_eq!(merged.total_tokens, Some(52));
     }
 
     #[test]

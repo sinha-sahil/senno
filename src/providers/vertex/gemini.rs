@@ -118,13 +118,17 @@ struct UsageMeta {
     prompt_token_count: Option<u32>,
     candidates_token_count: Option<u32>,
     total_token_count: Option<u32>,
+    thoughts_token_count: Option<u32>,
+    cached_content_token_count: Option<u32>,
 }
 
 impl From<UsageMeta> for Usage {
     fn from(u: UsageMeta) -> Self {
         Usage {
             input_tokens: u.prompt_token_count,
+            cached_input_tokens: u.cached_content_token_count,
             output_tokens: u.candidates_token_count,
+            reasoning_tokens: u.thoughts_token_count,
             total_tokens: u.total_token_count,
         }
     }
@@ -450,6 +454,48 @@ fn find_frame_boundary(buf: &[u8]) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    fn sse_response(frames: &[&str]) -> reqwest::Response {
+        let body: String = frames.iter().map(|f| format!("data: {f}\n\n")).collect();
+        reqwest::Response::from(http::Response::new(body))
+    }
+
+    async fn done_usage(frames: &[&str]) -> Option<Usage> {
+        let mut stream = parse_sse(sse_response(frames));
+        let mut seen = Vec::new();
+        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            if let Ok(StreamChunk::Done { usage, .. }) = chunk {
+                seen.push(usage);
+            }
+        }
+        assert_eq!(seen.len(), 1, "exactly one Done per stream");
+        seen.remove(0)
+    }
+
+    #[tokio::test]
+    async fn stream_surfaces_thinking_and_cached_tokens() {
+        let usage = done_usage(&[
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}"#,
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":40,"candidatesTokenCount":20,"thoughtsTokenCount":30,"totalTokenCount":150}}"#,
+        ])
+        .await
+        .expect("Done carries usage");
+
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.cached_input_tokens, Some(40));
+        assert_eq!(usage.output_tokens, Some(20));
+        assert_eq!(usage.reasoning_tokens, Some(30));
+        assert_eq!(usage.total_tokens, Some(150));
+    }
+
+    #[tokio::test]
+    async fn a_stream_without_usage_metadata_yields_a_done_with_none() {
+        let usage = done_usage(&[
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}"#,
+        ])
+        .await;
+        assert!(usage.is_none());
+    }
+
     use super::*;
 
     #[test]
