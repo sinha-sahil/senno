@@ -1,12 +1,12 @@
 use crate::error::Error;
 use crate::provider::LlmProvider;
 use crate::types as llm;
-use crate::types::StreamChunk;
+use crate::types::{StreamChunk, Usage};
 use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use super::compactor::{HistoryCompactor, LlmSummaryCompactor};
+use super::compactor::{Compaction, HistoryCompactor, LlmSummaryCompactor};
 use super::config::AgentConfig;
 use super::types::*;
 
@@ -53,6 +53,7 @@ impl AgentEngine {
             session.messages.push(ChatMessage::User {
                 content: message.to_string(),
             });
+            session.usage.record_turn();
 
             let tools = flow.tool_definitions();
             let system = flow.system_prompt();
@@ -65,6 +66,9 @@ impl AgentEngine {
                     self.config.max_history_messages,
                     self.compactor.as_deref(),
                 ).await {
+                    if let Some(model) = &r.model {
+                        session.usage.record_compaction(model, r.usage.as_ref());
+                    }
                     yield Ok(SseEvent::Data {
                         r#type: "compaction".into(),
                         payload: serde_json::json!({
@@ -93,6 +97,7 @@ impl AgentEngine {
 
                 let mut full_text = String::new();
                 let mut got_tool_call = false;
+                let mut usage_seen = false;
 
                 futures::pin_mut!(chunk_stream);
                 while let Some(chunk) = futures::StreamExt::next(&mut chunk_stream).await {
@@ -172,7 +177,12 @@ impl AgentEngine {
                                 label,
                             });
                         }
-                        Ok(StreamChunk::Done { .. }) => {}
+                        Ok(StreamChunk::Done { usage, .. }) => {
+                            if usage.is_some() {
+                                session.usage.record_call(&model, usage.as_ref());
+                                usage_seen = true;
+                            }
+                        }
                         Err(e) => {
                             yield Ok(SseEvent::Error {
                                 code: "stream_error".into(),
@@ -181,6 +191,10 @@ impl AgentEngine {
                             break;
                         }
                     }
+                }
+
+                if !usage_seen {
+                    session.usage.record_call(&model, None);
                 }
 
                 if !full_text.is_empty() {
@@ -207,6 +221,7 @@ impl AgentEngine {
             session.last_active = now_rfc3339();
             yield Ok(SseEvent::Done {
                 session_id: session.id.clone(),
+                usage: session.usage.clone(),
             });
         };
 
@@ -263,12 +278,14 @@ fn build_llm_request(
 /// Result of a compaction / truncation pass. Returned so callers (e.g. the
 /// engine) can surface it as an observable event.
 pub struct CompactionResult {
-    pub strategy: &'static str, // "summarize" or "truncate"
+    pub strategy: &'static str,
     pub messages_before: usize,
     pub messages_after: usize,
     pub summarized: usize,
-    pub summary: Option<String>, // present only when strategy == "summarize"
+    pub summary: Option<String>,
     pub elapsed_ms: u64,
+    pub model: Option<String>,
+    pub usage: Option<Usage>,
 }
 
 /// Bring `messages.len()` down to `max`. If a compactor is configured, split at
@@ -301,12 +318,16 @@ async fn compact_or_truncate(
         );
         let prefix: Vec<ChatMessage> = messages.drain(..split).collect();
         match c.compact(&prefix).await {
-            Ok(summary_msg) => {
-                let summary_text = match &summary_msg {
+            Ok(Compaction {
+                message,
+                model,
+                usage,
+            }) => {
+                let summary_text = match &message {
                     ChatMessage::Assistant { content } => content.clone(),
                     _ => String::new(),
                 };
-                messages.insert(0, summary_msg);
+                messages.insert(0, message);
                 let after_len = messages.len();
                 return Some(CompactionResult {
                     strategy: "summarize",
@@ -315,6 +336,8 @@ async fn compact_or_truncate(
                     summarized: split,
                     summary: Some(summary_text),
                     elapsed_ms: start.elapsed().as_millis() as u64,
+                    model,
+                    usage,
                 });
             }
             Err(e) => {
@@ -331,6 +354,8 @@ async fn compact_or_truncate(
                     summarized: split,
                     summary: None,
                     elapsed_ms: start.elapsed().as_millis() as u64,
+                    model: None,
+                    usage: None,
                 });
             }
         }
@@ -347,6 +372,8 @@ async fn compact_or_truncate(
         summarized: ideal,
         summary: None,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        model: None,
+        usage: None,
     })
 }
 
@@ -389,16 +416,16 @@ mod tests {
 
     struct StubCompactor {
         calls: Mutex<Vec<Vec<ChatMessage>>>,
-        result: Result<ChatMessage, Error>,
+        result: Result<Compaction, Error>,
     }
 
     impl StubCompactor {
         fn ok() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
-                result: Ok(ChatMessage::Assistant {
+                result: Ok(Compaction::new(ChatMessage::Assistant {
                     content: "[summary]".into(),
-                }),
+                })),
             }
         }
         fn err() -> Self {
@@ -413,8 +440,7 @@ mod tests {
         fn compact<'a>(
             &'a self,
             messages: &'a [ChatMessage],
-        ) -> Pin<Box<dyn futures::Future<Output = Result<ChatMessage, Error>> + Send + 'a>>
-        {
+        ) -> Pin<Box<dyn futures::Future<Output = Result<Compaction, Error>> + Send + 'a>> {
             self.calls.lock().unwrap().push(messages.to_vec());
             let result = match &self.result {
                 Ok(m) => Ok(m.clone()),

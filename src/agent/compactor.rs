@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::provider::LlmProvider;
-use crate::types::{GenerateRequest, Message};
+use crate::types::{GenerateRequest, Message, Usage};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,7 +11,30 @@ pub trait HistoryCompactor: Send + Sync {
     fn compact<'a>(
         &'a self,
         messages: &'a [ChatMessage],
-    ) -> Pin<Box<dyn Future<Output = Result<ChatMessage, Error>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Compaction, Error>> + Send + 'a>>;
+}
+
+#[derive(Debug, Clone)]
+pub struct Compaction {
+    pub message: ChatMessage,
+    pub model: Option<String>,
+    pub usage: Option<Usage>,
+}
+
+impl Compaction {
+    pub fn new(message: ChatMessage) -> Self {
+        Self {
+            message,
+            model: None,
+            usage: None,
+        }
+    }
+
+    pub fn with_usage(mut self, model: impl Into<String>, usage: Option<Usage>) -> Self {
+        self.model = Some(model.into());
+        self.usage = usage;
+        self
+    }
 }
 
 const DEFAULT_SUMMARY_PROMPT: &str = "Summarize the following conversation turns between a user and an assistant. Preserve:\n\
@@ -55,7 +78,7 @@ impl HistoryCompactor for LlmSummaryCompactor {
     fn compact<'a>(
         &'a self,
         messages: &'a [ChatMessage],
-    ) -> Pin<Box<dyn Future<Output = Result<ChatMessage, Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Compaction, Error>> + Send + 'a>> {
         Box::pin(async move {
             let rendered = render_for_summary(messages);
             let prompt = format!("{}\n\nConversation:\n{rendered}", self.prompt);
@@ -69,9 +92,10 @@ impl HistoryCompactor for LlmSummaryCompactor {
                 .text()
                 .unwrap_or_else(|| "[summary unavailable]".into());
 
-            Ok(ChatMessage::Assistant {
+            Ok(Compaction::new(ChatMessage::Assistant {
                 content: format!("[Prior conversation summary]\n{summary}"),
             })
+            .with_usage(&self.model, resp.usage.clone()))
         })
     }
 }

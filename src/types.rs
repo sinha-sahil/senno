@@ -224,10 +224,12 @@ impl GenerateResponse {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Usage {
     pub input_tokens: Option<u32>,
+    pub cached_input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    pub reasoning_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
 }
 

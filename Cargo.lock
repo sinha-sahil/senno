@@ -1474,6 +1474,7 @@ dependencies = [
  "axum",
  "cargo-husky",
  "futures",
+ "http",
  "indexmap",
  "jsonwebtoken",
  "nanoid",

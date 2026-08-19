@@ -5,7 +5,7 @@ mod engine;
 mod stream;
 mod types;
 
-pub use compactor::{HistoryCompactor, LlmSummaryCompactor};
+pub use compactor::{Compaction, HistoryCompactor, LlmSummaryCompactor};
 pub use config::{AgentConfig, AgentConfigBuilder};
 pub use engine::{AgentEngine, CompactionResult};
 #[cfg(feature = "axum")]

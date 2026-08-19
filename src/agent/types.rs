@@ -1,6 +1,7 @@
 use crate::error::Error;
-use crate::types::ToolDefinition;
+use crate::types::{ToolDefinition, Usage};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -73,7 +74,81 @@ pub enum SseEvent {
     },
     Done {
         session_id: String,
+        usage: SessionUsage,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub calls: u32,
+    pub compactions: u32,
+    pub unmetered_calls: u32,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
+}
+
+impl TokenUsage {
+    fn add(&mut self, usage: Option<&Usage>, compaction: bool) {
+        self.calls = self.calls.saturating_add(1);
+        if compaction {
+            self.compactions = self.compactions.saturating_add(1);
+        }
+        let Some(u) = usage else {
+            self.unmetered_calls = self.unmetered_calls.saturating_add(1);
+            return;
+        };
+
+        let input = u64::from(u.input_tokens.unwrap_or(0));
+        let output = u64::from(u.output_tokens.unwrap_or(0));
+        let reasoning = u.reasoning_tokens.map(u64::from).unwrap_or_else(|| {
+            u.total_tokens
+                .map_or(0, |t| u64::from(t).saturating_sub(input + output))
+        });
+        let total = u
+            .total_tokens
+            .map_or(input + output + reasoning, u64::from)
+            .max(input + output + reasoning);
+
+        self.input_tokens = self.input_tokens.saturating_add(input);
+        self.cached_input_tokens = self
+            .cached_input_tokens
+            .saturating_add(u64::from(u.cached_input_tokens.unwrap_or(0)));
+        self.output_tokens = self.output_tokens.saturating_add(output);
+        self.reasoning_tokens = self.reasoning_tokens.saturating_add(reasoning);
+        self.total_tokens = self.total_tokens.saturating_add(total);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionUsage {
+    pub turns: u32,
+    pub totals: TokenUsage,
+    pub by_model: BTreeMap<String, TokenUsage>,
+}
+
+impl SessionUsage {
+    pub fn record_call(&mut self, model: &str, usage: Option<&Usage>) {
+        self.entry(model, usage, false);
+    }
+
+    pub fn record_compaction(&mut self, model: &str, usage: Option<&Usage>) {
+        self.entry(model, usage, true);
+    }
+
+    pub fn record_turn(&mut self) {
+        self.turns = self.turns.saturating_add(1);
+    }
+
+    fn entry(&mut self, model: &str, usage: Option<&Usage>, compaction: bool) {
+        self.totals.add(usage, compaction);
+        self.by_model
+            .entry(model.to_string())
+            .or_default()
+            .add(usage, compaction);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +165,8 @@ pub struct AgentSession {
     pub flow: String,
     pub messages: Vec<ChatMessage>,
     pub metadata: serde_json::Value,
+    #[serde(default)]
+    pub usage: SessionUsage,
     pub created_at: String,
     pub last_active: String,
 }
@@ -102,6 +179,7 @@ impl AgentSession {
             flow: flow.into(),
             messages: Vec::new(),
             metadata: serde_json::json!({}),
+            usage: SessionUsage::default(),
             created_at: now.clone(),
             last_active: now,
         }
@@ -186,6 +264,113 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    fn gemini_usage(input: u32, output: u32, thoughts: Option<u32>, total: Option<u32>) -> Usage {
+        Usage {
+            input_tokens: Some(input),
+            output_tokens: Some(output),
+            reasoning_tokens: thoughts,
+            total_tokens: total,
+            cached_input_tokens: None,
+        }
+    }
+
+    #[test]
+    fn reported_thinking_tokens_are_kept_out_of_output() {
+        let mut u = SessionUsage::default();
+        u.record_call(
+            "gemini-2.5-flash",
+            Some(&gemini_usage(100, 50, Some(250), Some(400))),
+        );
+        assert_eq!(u.totals.input_tokens, 100);
+        assert_eq!(u.totals.output_tokens, 50);
+        assert_eq!(u.totals.reasoning_tokens, 250);
+        assert_eq!(u.totals.total_tokens, 400);
+    }
+
+    #[test]
+    fn thinking_tokens_are_derived_when_the_provider_omits_them() {
+        let mut u = SessionUsage::default();
+        u.record_call(
+            "gemini-2.5-flash",
+            Some(&gemini_usage(100, 50, None, Some(400))),
+        );
+        assert_eq!(u.totals.reasoning_tokens, 250);
+        assert_eq!(u.totals.total_tokens, 400);
+    }
+
+    #[test]
+    fn total_falls_back_to_the_sum_and_never_shrinks_below_it() {
+        let mut u = SessionUsage::default();
+        u.record_call("m", Some(&gemini_usage(100, 50, None, None)));
+        assert_eq!(u.totals.reasoning_tokens, 0);
+        assert_eq!(u.totals.total_tokens, 150);
+
+        let mut low = SessionUsage::default();
+        low.record_call("m", Some(&gemini_usage(100, 50, Some(10), Some(9))));
+        assert_eq!(low.totals.total_tokens, 160);
+    }
+
+    #[test]
+    fn a_call_without_usage_is_counted_and_flagged() {
+        let mut u = SessionUsage::default();
+        u.record_call("m", None);
+        assert_eq!(u.totals.calls, 1);
+        assert_eq!(u.totals.unmetered_calls, 1);
+        assert_eq!(u.totals.total_tokens, 0);
+    }
+
+    #[test]
+    fn compaction_is_counted_separately_but_still_billed() {
+        let mut u = SessionUsage::default();
+        u.record_call("m", Some(&gemini_usage(10, 5, None, None)));
+        u.record_compaction("m", Some(&gemini_usage(200, 40, None, None)));
+        assert_eq!(u.totals.calls, 2);
+        assert_eq!(u.totals.compactions, 1);
+        assert_eq!(u.totals.total_tokens, 255);
+    }
+
+    #[test]
+    fn usage_splits_by_model() {
+        let mut u = SessionUsage::default();
+        u.record_call("gemini-2.5-flash", Some(&gemini_usage(10, 5, None, None)));
+        u.record_call("gemini-2.5-pro", Some(&gemini_usage(20, 10, None, None)));
+        assert_eq!(u.by_model["gemini-2.5-flash"].total_tokens, 15);
+        assert_eq!(u.by_model["gemini-2.5-pro"].total_tokens, 30);
+        assert_eq!(u.totals.total_tokens, 45);
+    }
+
+    #[test]
+    fn serialized_session_keys_stay_snake_case() {
+        let mut session = AgentSession::new("s1", "commerce");
+        session
+            .usage
+            .record_call("gemini-2.5-flash", Some(&Usage::default()));
+        let json = serde_json::to_value(&session).unwrap();
+
+        assert!(json.get("created_at").is_some());
+        assert!(json.get("last_active").is_some());
+        let totals = &json["usage"]["totals"];
+        for key in [
+            "unmetered_calls",
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+        ] {
+            assert!(totals.get(key).is_some(), "missing {key}");
+        }
+        assert!(json["usage"].get("by_model").is_some());
+    }
+
+    #[test]
+    fn session_without_usage_field_still_deserializes() {
+        let stored = r#"{"id":"s1","flow":"commerce","messages":[],"metadata":{},
+            "created_at":"2026-08-20T00:00:00Z","last_active":"2026-08-20T00:00:00Z"}"#;
+        let session: AgentSession = serde_json::from_str(stored).unwrap();
+        assert_eq!(session.usage, SessionUsage::default());
     }
 
     #[test]
