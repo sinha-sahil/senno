@@ -3,6 +3,13 @@
 All notable changes to senno are documented here.
 
 
+## [0.3.0] - 2026-08-19
+
+### Features
+
+- Add support for embedding models in Vertex AI (656a92d)
+
+
 ## [0.2.0] - 2026-08-13
 
 ### Features
