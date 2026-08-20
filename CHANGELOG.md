@@ -3,6 +3,17 @@
 All notable changes to senno are documented here.
 
 
+## [0.4.1] - 2026-08-20
+
+### Bug Fixes
+
+- Added missing predict api type in gemini (b24c419)
+
+### Miscellaneous
+
+- Fix the version reader for bump (826c697)
+
+
 ## [0.4.0] - 2026-08-19
 
 ### Features
