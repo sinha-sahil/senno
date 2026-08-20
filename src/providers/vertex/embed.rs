@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::types::{EmbedRequest, EmbedResponse, EmbedTaskType, Embedding};
+use crate::types::{EmbedApi, EmbedRequest, EmbedResponse, EmbedTaskType, Embedding};
 
 use super::client::VertexClient;
 use super::config::ResolvedAuth;
@@ -29,13 +29,17 @@ pub(crate) async fn embed(
         ResolvedAuth::ServiceAccount {
             project_id, region, ..
         } => {
-            let url = predict_endpoint(
-                &client.vertex_base(region),
-                project_id,
-                region,
-                &request.model,
-            );
-            embed_predict(client, request, &url).await
+            let base = client.vertex_base(region);
+            match resolve_api(request) {
+                EmbedApi::Predict => {
+                    let url = predict_endpoint(&base, project_id, region, &request.model);
+                    embed_predict(client, request, &url).await
+                }
+                EmbedApi::EmbedContent => {
+                    let url = embed_content_endpoint(&base, project_id, region, &request.model);
+                    embed_contents(client, request, &url).await
+                }
+            }
         }
     };
     or_total_failure(response)
@@ -364,6 +368,109 @@ async fn embed_single_instance(
         .ok_or_else(|| Error::bad_response("predict returned no embedding"))
 }
 
+fn resolve_api(request: &EmbedRequest) -> EmbedApi {
+    request.api.unwrap_or_else(|| infer_api(&request.model))
+}
+
+fn infer_api(model: &str) -> EmbedApi {
+    let Some(version) = model_id(model).strip_prefix("gemini-embedding-") else {
+        return EmbedApi::Predict;
+    };
+
+    match version.parse::<u32>() {
+        Ok(version) if version >= 2 => EmbedApi::EmbedContent,
+        _ => EmbedApi::Predict,
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbedContentRequest {
+    content: TextContent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_type: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_dimensionality: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct EmbedContentResponse {
+    embedding: ContentEmbedding,
+}
+
+#[derive(Deserialize)]
+struct ContentEmbedding {
+    values: Vec<f32>,
+    #[serde(default)]
+    statistics: Option<Statistics>,
+}
+
+impl From<ContentEmbedding> for Embedding {
+    fn from(e: ContentEmbedding) -> Self {
+        let stats = e.statistics;
+        Embedding {
+            values: e.values,
+            token_count: stats.as_ref().and_then(|s| s.token_count).map(|t| t as u32),
+            truncated: stats.as_ref().and_then(|s| s.truncated),
+        }
+    }
+}
+
+async fn embed_contents(client: &VertexClient, request: &EmbedRequest, url: &str) -> EmbedResponse {
+    let mut calls = Vec::new();
+    for (index, text) in request.texts.iter().enumerate() {
+        calls.push(embed_one_content(client, url, request, index, text));
+    }
+
+    let embeddings: Vec<Result<Embedding, Error>> = futures::stream::iter(calls)
+        .buffered(REQUEST_CONCURRENCY)
+        .collect()
+        .await;
+
+    let total_token_count = embeddings
+        .iter()
+        .flatten()
+        .fold(None, |total, e| add_tokens(total, e.token_count));
+
+    EmbedResponse {
+        embeddings,
+        total_token_count,
+    }
+}
+
+async fn embed_one_content(
+    client: &VertexClient,
+    url: &str,
+    request: &EmbedRequest,
+    index: usize,
+    text: &str,
+) -> Result<Embedding, Error> {
+    let wire = EmbedContentRequest {
+        content: TextContent::new(text),
+        task_type: request.task_type.map(EmbedTaskType::as_str),
+        title: request.title.clone(),
+        output_dimensionality: request.output_dimensionality,
+    };
+
+    let resp = client
+        .send_with_retry(|| client.http.post(url).json(&wire), index)
+        .await?;
+
+    resp.json::<EmbedContentResponse>()
+        .await
+        .map(|wire| Embedding::from(wire.embedding))
+        .map_err(|e| Error::provider("vertex-ai", format!("Parse failed: {e}")))
+}
+
+fn embed_content_endpoint(base: &str, project_id: &str, region: &str, model: &str) -> String {
+    let model = model_id(model);
+    format!(
+        "{base}/v1beta1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:embedContent"
+    )
+}
+
 fn predict_endpoint(base: &str, project_id: &str, region: &str, model: &str) -> String {
     let model = model_id(model);
     format!(
@@ -392,6 +499,68 @@ mod tests {
             batch_endpoint(GEMINI_API, "gemini-embedding-001"),
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
         );
+    }
+
+    #[test]
+    fn the_api_is_inferred_from_the_model_version() {
+        assert_eq!(infer_api("gemini-embedding-001"), EmbedApi::Predict);
+        assert_eq!(infer_api("text-embedding-005"), EmbedApi::Predict);
+        assert_eq!(infer_api("gemini-embedding-2"), EmbedApi::EmbedContent);
+        assert_eq!(
+            infer_api("models/gemini-embedding-2"),
+            EmbedApi::EmbedContent
+        );
+        assert_eq!(infer_api("gemini-embedding-3"), EmbedApi::EmbedContent);
+    }
+
+    #[test]
+    fn an_unparseable_or_unknown_model_stays_on_the_legacy_api() {
+        assert_eq!(infer_api("gemini-embedding-preview"), EmbedApi::Predict);
+        assert_eq!(infer_api("some-other-model"), EmbedApi::Predict);
+    }
+
+    #[test]
+    fn an_explicit_api_beats_the_heuristic() {
+        let req =
+            EmbedRequest::new("gemini-embedding-001", ["hello"]).with_api(EmbedApi::EmbedContent);
+        assert_eq!(resolve_api(&req), EmbedApi::EmbedContent);
+
+        let req = EmbedRequest::new("gemini-embedding-2", ["hello"]).with_api(EmbedApi::Predict);
+        assert_eq!(resolve_api(&req), EmbedApi::Predict);
+
+        assert_eq!(
+            resolve_api(&EmbedRequest::new("gemini-embedding-2", ["hello"])),
+            EmbedApi::EmbedContent,
+            "no explicit api falls back to the heuristic"
+        );
+    }
+
+    #[test]
+    fn embed_content_endpoint_is_v1beta1_and_not_doubled_up() {
+        assert_eq!(
+            embed_content_endpoint(
+                VERTEX_API,
+                "proj",
+                "asia-south1",
+                "models/gemini-embedding-2"
+            ),
+            "https://asia-south1-aiplatform.googleapis.com/v1beta1/projects/proj/locations/asia-south1/publishers/google/models/gemini-embedding-2:embedContent"
+        );
+    }
+
+    #[test]
+    fn embed_content_response_parses_values_and_statistics() {
+        let wire: EmbedContentResponse = serde_json::from_str(
+            r#"{"embedding":{"values":[0.1,0.2],"statistics":{"token_count":7.0,"truncated":false}}}"#,
+        )
+        .unwrap();
+        let embedding = Embedding::from(wire.embedding);
+        assert_eq!(embedding.values, vec![0.1, 0.2]);
+        assert_eq!(embedding.token_count, Some(7));
+
+        let bare: EmbedContentResponse =
+            serde_json::from_str(r#"{"embedding":{"values":[1.0]}}"#).unwrap();
+        assert_eq!(Embedding::from(bare.embedding).token_count, None);
     }
 
     #[test]
