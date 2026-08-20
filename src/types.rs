@@ -257,6 +257,18 @@ pub struct EmbedRequest {
     pub task_type: Option<EmbedTaskType>,
     pub output_dimensionality: Option<u32>,
     pub title: Option<String>,
+    pub api: Option<EmbedApi>,
+}
+
+/// Vertex serves embeddings through two disjoint APIs, and a model speaks exactly one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EmbedApi {
+    /// `:predict` — `text-embedding-*`, `gemini-embedding-001`.
+    Predict,
+    /// `:embedContent` — `gemini-embedding-2` and later.
+    EmbedContent,
 }
 
 impl EmbedRequest {
@@ -270,6 +282,7 @@ impl EmbedRequest {
             task_type: None,
             output_dimensionality: None,
             title: None,
+            api: None,
         }
     }
 
@@ -289,6 +302,11 @@ impl EmbedRequest {
 
     pub fn with_title(mut self, v: impl Into<String>) -> Self {
         self.title = Some(v.into());
+        self
+    }
+
+    pub fn with_api(mut self, v: EmbedApi) -> Self {
+        self.api = Some(v);
         self
     }
 }
