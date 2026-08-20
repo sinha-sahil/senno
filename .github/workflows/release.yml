@@ -76,7 +76,9 @@ jobs:
           echo "Bumping from $CURRENT_VERSION to $NEW_VERSION ($BUMP_TYPE)"
 
           # Update Cargo.toml
-          sed -i "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+          # Anchor to the first `version = ` line (the [package] one) so dependency
+          # versions that happen to match $CURRENT_VERSION are left untouched.
+          sed -i "0,/^version = \".*\"/s//version = \"$NEW_VERSION\"/" Cargo.toml
 
           # Verify the change
           echo "Updated Cargo.toml:"
