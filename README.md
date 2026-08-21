@@ -20,6 +20,7 @@ shipping its own.
 |---|---|
 | *(default)* | Canonical LLM types, the `LlmProvider`, `EmbeddingProvider`, `BatchGenerationProvider` and `BatchEmbeddingProvider` traits, `one_shot`, the full agent engine + compaction. No HTTP client in the tree. |
 | `vertex` | `VertexClient`: Gemini + Anthropic (Claude) on Vertex AI. API-key auth (Gemini) or service-account auth (both), token caching, streaming SSE parsing, Gemini thinking-model `thoughtSignature` handling, Gemini text embeddings via `EmbeddingProvider`, async bulk generation and bulk embedding at half price via `BatchGenerationProvider` / `BatchEmbeddingProvider`. |
+| `litellm` | `LiteLlmClient`: LiteLLM's OpenAI-compatible chat completions, streaming, function tools, and embeddings. Uses `LITELLM_BASE_URL` (default `http://localhost:4000`) and optional `LITELLM_API_KEY`. |
 | `batch` | `run_batch` / `run_embedding_batch` — submit a batch job and poll it to completion. Enabled by `vertex`. |
 | `axum` | `agent::to_sse_event` — map agent events straight into `axum::response::sse`. |
 
@@ -56,6 +57,22 @@ let client = get_vertex_client(
     ),
 )
 .await?;
+```
+
+### LiteLLM
+
+```rust
+use senno::providers::litellm::LiteLlmClient;
+use senno::{GenerateRequest, one_shot};
+
+// Base URL defaults to http://localhost:4000; override with LITELLM_BASE_URL.
+let client = LiteLlmClient::new(None)?;
+let resp = one_shot(
+    &client,
+    &GenerateRequest::one_shot("gpt-4o-mini", "You are terse.", "Say hi."),
+)
+.await?;
+println!("{}", resp.text().unwrap_or_default());
 ```
 
 ### Typed output via tool calling
