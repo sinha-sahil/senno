@@ -382,3 +382,39 @@ mod tests {
         assert!(s.metadata.is_object());
     }
 }
+
+impl SseEvent {
+    pub fn from_result(event: Result<SseEvent, Error>) -> SseEvent {
+        match event {
+            Ok(event) => event,
+            Err(error) => SseEvent::Error {
+                code: "internal".into(),
+                message: error.to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StreamStats {
+    pub text: u32,
+    pub tool_status: u32,
+    pub data: u32,
+    pub errors: u32,
+    pub done: u32,
+    pub saw_event: bool,
+    pub client_dropped: bool,
+}
+
+impl StreamStats {
+    pub fn record(&mut self, event: &SseEvent) {
+        self.saw_event = true;
+        match event {
+            SseEvent::Text { .. } => self.text += 1,
+            SseEvent::ToolStatus { .. } => self.tool_status += 1,
+            SseEvent::Data { .. } => self.data += 1,
+            SseEvent::Error { .. } => self.errors += 1,
+            SseEvent::Done { .. } => self.done += 1,
+        }
+    }
+}

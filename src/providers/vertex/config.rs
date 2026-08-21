@@ -1,6 +1,7 @@
 use super::env::{resolve_optional, resolve_with_default};
 use super::token::{ServiceAccountKey, TokenSource};
 use crate::error::Error;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default)]
@@ -133,6 +134,85 @@ pub(crate) fn regional_host(region: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexField {
+    ProjectId,
+    Region,
+    ClientEmail,
+    PrivateKey,
+    ApiKey,
+}
+
+impl VertexField {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProjectId => "projectId",
+            Self::Region => "region",
+            Self::ClientEmail => "clientEmail",
+            Self::PrivateKey => "privateKey",
+            Self::ApiKey => "apiKey",
+        }
+    }
+
+    pub fn is_secret(self) -> bool {
+        matches!(self, Self::PrivateKey | Self::ApiKey)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexAuth {
+    ServiceAccount,
+    ApiKey,
+    MetadataServer,
+}
+
+impl VertexAuth {
+    pub fn all() -> &'static [VertexAuth] {
+        &[Self::ServiceAccount, Self::ApiKey, Self::MetadataServer]
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ServiceAccount => "serviceAccount",
+            Self::ApiKey => "apiKey",
+            Self::MetadataServer => "metadataServer",
+        }
+    }
+
+    pub fn required_fields(self) -> &'static [VertexField] {
+        match self {
+            Self::ServiceAccount => &[
+                VertexField::ProjectId,
+                VertexField::ClientEmail,
+                VertexField::PrivateKey,
+            ],
+            Self::ApiKey => &[VertexField::ApiKey],
+            Self::MetadataServer => &[VertexField::ProjectId],
+        }
+    }
+}
+
+impl FromStr for VertexAuth {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|auth| auth.as_str() == value)
+            .ok_or_else(|| {
+                Error::Config(format!(
+                    "unknown vertex auth type '{value}' — expected one of: {}",
+                    Self::all()
+                        .iter()
+                        .map(|auth| auth.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +228,39 @@ mod tests {
             "us-central1-aiplatform.googleapis.com"
         );
         assert_eq!(regional_host("global"), "aiplatform.googleapis.com");
+    }
+
+    #[test]
+    fn vertex_auth_round_trips_through_str() {
+        for auth in VertexAuth::all() {
+            assert_eq!(auth.as_str().parse::<VertexAuth>().unwrap(), *auth);
+        }
+    }
+
+    #[test]
+    fn an_unknown_vertex_auth_lists_the_supported_ones() {
+        let err = "oauth".parse::<VertexAuth>().unwrap_err().to_string();
+        assert!(err.contains("oauth"));
+        assert!(err.contains("serviceAccount"));
+    }
+
+    #[test]
+    fn service_account_auth_requires_its_three_fields() {
+        assert_eq!(
+            VertexAuth::ServiceAccount.required_fields(),
+            &[
+                VertexField::ProjectId,
+                VertexField::ClientEmail,
+                VertexField::PrivateKey
+            ]
+        );
+    }
+
+    #[test]
+    fn only_credential_fields_are_secret() {
+        assert!(VertexField::PrivateKey.is_secret());
+        assert!(VertexField::ApiKey.is_secret());
+        assert!(!VertexField::ProjectId.is_secret());
+        assert!(!VertexField::Region.is_secret());
     }
 }
