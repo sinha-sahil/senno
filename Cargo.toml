@@ -27,6 +27,7 @@ exclude = [
 default = []
 batch = ["dep:tokio"]
 vertex = ["dep:reqwest", "dep:jsonwebtoken", "dep:nanoid", "dep:tokio", "batch"]
+litellm = ["dep:reqwest", "dep:tokio"]
 axum = ["dep:axum"]
 
 [dependencies]

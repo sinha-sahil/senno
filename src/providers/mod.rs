@@ -3,3 +3,6 @@
 
 #[cfg(feature = "vertex")]
 pub mod vertex;
+
+#[cfg(feature = "litellm")]
+pub mod litellm;
