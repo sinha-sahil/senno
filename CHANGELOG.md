@@ -3,6 +3,13 @@
 All notable changes to senno are documented here.
 
 
+## [0.5.0] - 2026-08-21
+
+### Features
+
+- Added config-driven construction for Vertex provider (6d0527d)
+
+
 ## [0.4.1] - 2026-08-20
 
 ### Bug Fixes
