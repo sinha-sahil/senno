@@ -6,6 +6,7 @@ use crate::types::{
     BatchJob, EmbedRequest, EmbedResponse, Embedding, GenerateRequest, GenerateResponse,
 };
 use std::pin::Pin;
+use std::str::FromStr;
 use std::time::Duration;
 
 use super::config::{ResolvedAuth, regional_host};
@@ -241,6 +242,40 @@ impl BatchEmbeddingProvider for VertexClient {
     }
 }
 
+impl VertexProvider {
+    pub fn all() -> &'static [VertexProvider] {
+        &[Self::Gemini, Self::Anthropic]
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gemini => "gemini",
+            Self::Anthropic => "anthropic",
+        }
+    }
+}
+
+impl FromStr for VertexProvider {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+            .ok_or_else(|| {
+                Error::Config(format!(
+                    "unknown vertex variant '{value}' — expected one of: {}",
+                    Self::all()
+                        .iter()
+                        .map(|variant| variant.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +348,22 @@ mod tests {
         assert_ne!(a, b);
         assert!(a >= HTTP_RETRY_BASE_DELAY);
         assert!(b < HTTP_RETRY_BASE_DELAY + HTTP_RETRY_JITTER);
+    }
+
+    #[test]
+    fn vertex_provider_round_trips_through_str() {
+        for variant in VertexProvider::all() {
+            assert_eq!(
+                variant.as_str().parse::<VertexProvider>().unwrap(),
+                *variant
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_vertex_variant_lists_the_supported_ones() {
+        let err = "llama".parse::<VertexProvider>().unwrap_err().to_string();
+        assert!(err.contains("llama"));
+        assert!(err.contains("gemini"));
     }
 }

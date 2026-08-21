@@ -1,10 +1,12 @@
 use crate::error::Error;
+use crate::types::GenerationParams;
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub model: String,
     pub max_tool_rounds: usize,
     pub max_history_messages: usize,
+    pub params: GenerationParams,
 }
 
 impl AgentConfig {
@@ -13,6 +15,7 @@ impl AgentConfig {
             model: model.into(),
             max_tool_rounds: None,
             max_history_messages: None,
+            params: GenerationParams::default(),
         }
     }
 }
@@ -21,6 +24,7 @@ pub struct AgentConfigBuilder {
     model: String,
     max_tool_rounds: Option<usize>,
     max_history_messages: Option<usize>,
+    params: GenerationParams,
 }
 
 impl AgentConfigBuilder {
@@ -34,6 +38,11 @@ impl AgentConfigBuilder {
         self
     }
 
+    pub fn params(mut self, params: GenerationParams) -> Self {
+        self.params = params;
+        self
+    }
+
     pub fn build(self) -> Result<AgentConfig, Error> {
         if self.model.trim().is_empty() {
             return Err(Error::config("AgentConfig.model must be non-empty"));
@@ -42,6 +51,7 @@ impl AgentConfigBuilder {
             model: self.model,
             max_tool_rounds: self.max_tool_rounds.unwrap_or(5),
             max_history_messages: self.max_history_messages.unwrap_or(50),
+            params: self.params,
         })
     }
 }
@@ -72,5 +82,21 @@ mod tests {
     fn empty_model_returns_error() {
         let err = AgentConfig::builder("   ").build().unwrap_err();
         assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn generation_params_default_to_unset() {
+        let c = AgentConfig::builder("m").build().unwrap();
+        assert_eq!(c.params, GenerationParams::default());
+    }
+
+    #[test]
+    fn generation_params_survive_the_builder() {
+        let params = GenerationParams {
+            temperature: Some(0.2),
+            ..GenerationParams::default()
+        };
+        let c = AgentConfig::builder("m").params(params).build().unwrap();
+        assert_eq!(c.params.temperature, Some(0.2));
     }
 }

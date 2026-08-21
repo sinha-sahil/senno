@@ -17,7 +17,7 @@ pub struct AgentEngine {
 }
 
 impl AgentEngine {
-    pub(crate) fn new(provider: Arc<dyn LlmProvider>, config: AgentConfig) -> Self {
+    pub fn new(provider: Arc<dyn LlmProvider>, config: AgentConfig) -> Self {
         Self {
             provider,
             compactor: None,
@@ -58,6 +58,7 @@ impl AgentEngine {
             let tools = flow.tool_definitions();
             let system = flow.system_prompt();
             let model = self.config.model.clone();
+            let params = self.config.params;
             let mut tool_rounds = 0usize;
 
             loop {
@@ -82,7 +83,8 @@ impl AgentEngine {
                     });
                 }
 
-                let request = build_llm_request(&model, &session.messages, &tools, &system);
+                let request =
+                    build_llm_request(&model, &session.messages, &tools, &system, params);
 
                 let chunk_stream = match self.provider.stream_generate(&request).await {
                     Ok(s) => s,
@@ -264,9 +266,11 @@ fn build_llm_request(
     messages: &[ChatMessage],
     tools: &[llm::ToolDefinition],
     system: &str,
+    params: llm::GenerationParams,
 ) -> llm::GenerateRequest {
     let mut req = llm::GenerateRequest::new(model, session_to_llm_messages(messages))
-        .with_tools(tools.to_vec());
+        .with_tools(tools.to_vec())
+        .with_params(params);
 
     if !system.is_empty() {
         req = req.with_system(system);

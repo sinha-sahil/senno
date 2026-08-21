@@ -8,7 +8,7 @@ mod gemini;
 mod token;
 
 pub use client::{VertexClient, VertexProvider};
-pub use config::VertexConfig;
+pub use config::{VertexAuth, VertexConfig, VertexField};
 pub use token::{DEFAULT_METADATA_BASE_URL, ServiceAccountKey, TokenSource};
 
 use std::time::Duration;

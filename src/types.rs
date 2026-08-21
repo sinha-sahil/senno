@@ -1,5 +1,7 @@
+use crate::error::Error;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -94,8 +96,16 @@ impl Message {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GenerationParams {
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub max_tokens: Option<u32>,
+    pub thinking_budget: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub struct GenerateRequest {
     pub model: String,
     pub messages: Vec<Message>,
@@ -134,6 +144,25 @@ impl GenerateRequest {
         Self::new(model, vec![Message::user(prompt)])
             .with_system(system)
             .with_temperature(0.0)
+    }
+
+    pub fn with_params(mut self, params: GenerationParams) -> Self {
+        if let Some(v) = params.temperature {
+            self.temperature = Some(v);
+        }
+        if let Some(v) = params.top_p {
+            self.top_p = Some(v);
+        }
+        if let Some(v) = params.top_k {
+            self.top_k = Some(v);
+        }
+        if let Some(v) = params.max_tokens {
+            self.max_tokens = Some(v);
+        }
+        if let Some(v) = params.thinking_budget {
+            self.thinking_budget = Some(v);
+        }
+        self
     }
 
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
@@ -325,7 +354,38 @@ pub enum EmbedTaskType {
     CodeRetrievalQuery,
 }
 
+impl FromStr for EmbedTaskType {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "RETRIEVAL_QUERY" => Ok(Self::RetrievalQuery),
+            "RETRIEVAL_DOCUMENT" => Ok(Self::RetrievalDocument),
+            "SEMANTIC_SIMILARITY" => Ok(Self::SemanticSimilarity),
+            "CLASSIFICATION" => Ok(Self::Classification),
+            "CLUSTERING" => Ok(Self::Clustering),
+            "QUESTION_ANSWERING" => Ok(Self::QuestionAnswering),
+            "FACT_VERIFICATION" => Ok(Self::FactVerification),
+            "CODE_RETRIEVAL_QUERY" => Ok(Self::CodeRetrievalQuery),
+            other => Err(Error::Config(format!("unknown embed task type '{other}'"))),
+        }
+    }
+}
+
 impl EmbedTaskType {
+    pub fn all() -> &'static [EmbedTaskType] {
+        &[
+            Self::RetrievalQuery,
+            Self::RetrievalDocument,
+            Self::SemanticSimilarity,
+            Self::Classification,
+            Self::Clustering,
+            Self::QuestionAnswering,
+            Self::FactVerification,
+            Self::CodeRetrievalQuery,
+        ]
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RetrievalQuery => "RETRIEVAL_QUERY",
@@ -902,5 +962,44 @@ mod tests {
             .map(|e| e.values[0])
             .collect();
         assert_eq!(values, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn embed_task_type_round_trips_through_str() {
+        for task in EmbedTaskType::all() {
+            assert_eq!(task.as_str().parse::<EmbedTaskType>().unwrap(), *task);
+        }
+    }
+
+    #[test]
+    fn an_unknown_embed_task_type_is_rejected_by_name() {
+        let err = "NOT_A_TASK".parse::<EmbedTaskType>().unwrap_err();
+        assert!(err.to_string().contains("NOT_A_TASK"));
+    }
+
+    #[test]
+    fn with_params_sets_every_generation_field() {
+        let params = GenerationParams {
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            max_tokens: Some(256),
+            thinking_budget: Some(1024),
+        };
+        let req = GenerateRequest::new("m", vec![]).with_params(params);
+        assert_eq!(req.temperature, Some(0.5));
+        assert_eq!(req.top_p, Some(0.9));
+        assert_eq!(req.top_k, Some(40));
+        assert_eq!(req.max_tokens, Some(256));
+        assert_eq!(req.thinking_budget, Some(1024));
+    }
+
+    #[test]
+    fn with_params_leaves_unset_fields_untouched() {
+        let req = GenerateRequest::new("m", vec![])
+            .with_max_tokens(99)
+            .with_params(GenerationParams::default());
+        assert_eq!(req.max_tokens, Some(99));
+        assert_eq!(req.temperature, None);
     }
 }
