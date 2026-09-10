@@ -3,6 +3,13 @@
 All notable changes to senno are documented here.
 
 
+## [0.5.1] - 2026-09-10
+
+### Bug Fixes
+
+- Stop leaking provider and tool errors over the wire (ece5b1e)
+
+
 ## [0.5.0] - 2026-08-21
 
 ### Features
