@@ -5,6 +5,10 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
+const UNAVAILABLE_MESSAGE: &str = "The assistant is temporarily unavailable. Please try again.";
+const INTERRUPTED_MESSAGE: &str = "The reply was interrupted. Please try again.";
+const MAX_TOOL_ROUNDS_MESSAGE: &str = "Maximum tool calling rounds exceeded";
+
 pub trait AgentFlow: Send + Sync {
     fn system_prompt(&self) -> String;
 
@@ -74,7 +78,6 @@ pub enum SseEvent {
     },
     Done {
         session_id: String,
-        usage: SessionUsage,
     },
 }
 
@@ -387,10 +390,33 @@ impl SseEvent {
     pub fn from_result(event: Result<SseEvent, Error>) -> SseEvent {
         match event {
             Ok(event) => event,
-            Err(error) => SseEvent::Error {
-                code: "internal".into(),
-                message: error.to_string(),
-            },
+            Err(error) => {
+                tracing::error!(error = %error, "agent stream failed");
+                Self::client_error("internal", UNAVAILABLE_MESSAGE)
+            }
+        }
+    }
+
+    pub(crate) fn llm_error() -> Self {
+        Self::client_error("llm_error", UNAVAILABLE_MESSAGE)
+    }
+
+    pub(crate) fn stream_error() -> Self {
+        Self::client_error("stream_error", INTERRUPTED_MESSAGE)
+    }
+
+    pub(crate) fn tool_error(tool: &str) -> Self {
+        Self::client_error("tool_error", format!("The {tool} tool failed."))
+    }
+
+    pub(crate) fn max_tool_rounds() -> Self {
+        Self::client_error("max_tool_rounds", MAX_TOOL_ROUNDS_MESSAGE)
+    }
+
+    fn client_error(code: &str, message: impl Into<String>) -> Self {
+        Self::Error {
+            code: code.into(),
+            message: message.into(),
         }
     }
 }

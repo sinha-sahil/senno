@@ -33,8 +33,8 @@ pub fn to_sse_event(event: SseEvent) -> sse::Event {
             .event("error")
             .data(serde_json::json!({ "code": code, "message": message }).to_string()),
 
-        SseEvent::Done { session_id, usage } => sse::Event::default()
+        SseEvent::Done { session_id } => sse::Event::default()
             .event("done")
-            .data(serde_json::json!({ "session_id": session_id, "usage": usage }).to_string()),
+            .data(serde_json::json!({ "session_id": session_id }).to_string()),
     }
 }
