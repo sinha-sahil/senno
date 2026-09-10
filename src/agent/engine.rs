@@ -89,10 +89,8 @@ impl AgentEngine {
                 let chunk_stream = match self.provider.stream_generate(&request).await {
                     Ok(s) => s,
                     Err(e) => {
-                        yield Ok(SseEvent::Error {
-                            code: "llm_error".into(),
-                            message: format!("{e:?}"),
-                        });
+                        tracing::error!(error = %e, "llm request failed");
+                        yield Ok(SseEvent::llm_error());
                         break;
                     }
                 };
@@ -131,17 +129,14 @@ impl AgentEngine {
                             {
                                 Ok(output) => output,
                                 Err(e) => {
-                                    let detail = e.to_string();
+                                    tracing::warn!(tool = %name, error = %e, "tool failed");
                                     yield Ok(SseEvent::ToolStatus {
                                         tool: name.clone(),
                                         status: ToolCallStatus::Error,
                                         label: label.clone(),
                                     });
-                                    yield Ok(SseEvent::Error {
-                                        code: "tool_error".into(),
-                                        message: detail.clone(),
-                                    });
-                                    ToolOutput::text(format!("Error executing {name}: {detail}"))
+                                    yield Ok(SseEvent::tool_error(&name));
+                                    ToolOutput::text(format!("Error executing {name}: {e}"))
                                 }
                             };
 
@@ -186,10 +181,8 @@ impl AgentEngine {
                             }
                         }
                         Err(e) => {
-                            yield Ok(SseEvent::Error {
-                                code: "stream_error".into(),
-                                message: format!("{e:?}"),
-                            });
+                            tracing::error!(error = %e, "llm stream failed");
+                            yield Ok(SseEvent::stream_error());
                             break;
                         }
                     }
@@ -208,10 +201,7 @@ impl AgentEngine {
                 if got_tool_call {
                     tool_rounds += 1;
                     if tool_rounds >= self.config.max_tool_rounds {
-                        yield Ok(SseEvent::Error {
-                            code: "max_tool_rounds".into(),
-                            message: "Maximum tool calling rounds exceeded".into(),
-                        });
+                        yield Ok(SseEvent::max_tool_rounds());
                         break;
                     }
                     continue;
@@ -223,7 +213,6 @@ impl AgentEngine {
             session.last_active = now_rfc3339();
             yield Ok(SseEvent::Done {
                 session_id: session.id.clone(),
-                usage: session.usage.clone(),
             });
         };
 

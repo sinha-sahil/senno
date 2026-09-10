@@ -157,11 +157,7 @@ async fn a_two_round_turn_accumulates_every_call_into_the_session() {
     assert_eq!(session.usage.totals.total_tokens, 400);
     assert_eq!(session.usage.by_model[MODEL].total_tokens, 400);
 
-    let Some(SseEvent::Done { usage, .. }) = events.last() else {
-        panic!("last event must be Done");
-    };
-    assert_eq!(usage.totals.total_tokens, 400);
-    assert_eq!(usage.turns, 1);
+    assert!(matches!(events.last(), Some(SseEvent::Done { .. })));
 }
 
 #[tokio::test]

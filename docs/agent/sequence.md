@@ -93,11 +93,13 @@ Not drawn in the diagram so the happy path stays readable. All paths still termi
 
 | Failure | Engine emits | Loop behaviour |
 |---|---|---|
-| `provider.stream_generate()` returns Err | `SseEvent::Error { code: "llm_error", .. }` | outer loop breaks |
-| Mid-stream chunk is Err | `SseEvent::Error { code: "stream_error", .. }` | inner chunk loop breaks; outer continues if a tool call was already handled this round |
-| `flow.execute_tool()` returns Err | `SseEvent::ToolStatus(Error)` + `SseEvent::Error { code: "tool_error", .. }` | the error's `Display` text is fed back to the LLM as the tool's content (`Error executing <name>: <detail>`) so the model can recover; loop continues |
+| `provider.stream_generate()` returns Err | `SseEvent::Error { code: "llm_error", .. }` | logged at `error!`; outer loop breaks |
+| Mid-stream chunk is Err | `SseEvent::Error { code: "stream_error", .. }` | logged at `error!`; inner chunk loop breaks; outer continues if a tool call was already handled this round |
+| `flow.execute_tool()` returns Err | `SseEvent::ToolStatus(Error)` + `SseEvent::Error { code: "tool_error", .. }` | logged at `warn!`; the error's `Display` text is fed back to the LLM as the tool's content (`Error executing <name>: <detail>`) so the model can recover; loop continues |
 | `HistoryCompactor::compact()` returns Err | `SseEvent::Data { type: "compaction", .. }` with `strategy: "truncate"` | logged at `warn!`; falls through to raw truncation |
 | `max_tool_rounds` reached | `SseEvent::Error { code: "max_tool_rounds", .. }` | outer loop breaks |
+
+Every `Error` frame's `message` is a fixed sentence built in `types.rs` (`SseEvent::llm_error()`, `stream_error()`, `tool_error(tool)`, `max_tool_rounds()`). The failing `Error` itself goes to `tracing` and is never serialized to the client; `SseEvent::from_result` does the same for an `Err` item (`code: "internal"`).
 
 ## What the client sees over the wire
 
@@ -112,6 +114,8 @@ Each `SseEvent` variant maps to a distinct SSE event type (via `to_sse_event`, f
 | `Done { session_id }` | `done` | `{"session_id": "<id>"}` |
 
 `label` is populated from the tool call's `doing` argument when the model supplies one, and omitted from the payload otherwise.
+
+`message` is always one of the fixed sentences above — never provider, model or tool text. Token accounting lives on `AgentSession.usage` and is not a frame.
 
 ## Session mutations during a run
 
