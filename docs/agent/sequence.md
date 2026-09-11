@@ -11,6 +11,7 @@ sequenceDiagram
     participant E as AgentEngine
     participant K as HistoryCompactor<br/>(optional)
     participant F as AgentFlow<br/>(consumer)
+    participant S as ToolSource<br/>(e.g. McpToolset)
     participant P as LlmProvider<br/>(e.g. VertexClient)
     participant L as Upstream LLM
 
@@ -54,8 +55,13 @@ sequenceDiagram
                 P-->>E: StreamChunk::ToolCall
                 E-->>H: SseEvent::ToolStatus(Calling)
                 H-->>C: event: tool_status
-                E->>F: execute_tool(name, args, &session)
-                F-->>E: ToolOutput { content, data?, session_metadata? }
+                alt name declared by flow.tool_definitions()
+                    E->>F: execute_tool(name, args, &session)
+                    F-->>E: ToolOutput { content, data?, session_metadata? }
+                else name owned by a tool source
+                    E->>S: invoke(name, args)
+                    S-->>E: ToolOutput { content, data?, session_metadata? }
+                end
                 opt output.data present
                     E-->>H: SseEvent::Data
                     H-->>C: event: data
@@ -91,13 +97,14 @@ sequenceDiagram
 
 Not drawn in the diagram so the happy path stays readable. All paths still terminate with `SseEvent::Done`, so the handler always sees a clean end-of-stream.
 
-| Failure | Engine emits | Loop behaviour |
-|---|---|---|
-| `provider.stream_generate()` returns Err | `SseEvent::Error { code: "llm_error", .. }` | logged at `error!`; outer loop breaks |
-| Mid-stream chunk is Err | `SseEvent::Error { code: "stream_error", .. }` | logged at `error!`; inner chunk loop breaks; outer continues if a tool call was already handled this round |
-| `flow.execute_tool()` returns Err | `SseEvent::ToolStatus(Error)` + `SseEvent::Error { code: "tool_error", .. }` | logged at `warn!`; the error's `Display` text is fed back to the LLM as the tool's content (`Error executing <name>: <detail>`) so the model can recover; loop continues |
-| `HistoryCompactor::compact()` returns Err | `SseEvent::Data { type: "compaction", .. }` with `strategy: "truncate"` | logged at `warn!`; falls through to raw truncation |
-| `max_tool_rounds` reached | `SseEvent::Error { code: "max_tool_rounds", .. }` | outer loop breaks |
+| Failure                                   | Engine emits                                                                 | Loop behaviour                                                                                                                                        |
+| ----------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider.stream_generate()` returns Err  | `SseEvent::Error { code: "llm_error", .. }`                                  | outer loop breaks                                                                                                                                     |
+| Mid-stream chunk is Err                   | `SseEvent::Error { code: "stream_error", .. }`                               | inner chunk loop breaks; outer continues if a tool call was already handled this round                                                                |
+| `source.invoke()` returns Err             | same as below — a tool source is dispatched through the identical path       |
+| `flow.execute_tool()` returns Err         | `SseEvent::ToolStatus(Error)` + `SseEvent::Error { code: "tool_error", .. }` | the error's `Display` text is fed back to the LLM as the tool's content (`Error executing <name>: <detail>`) so the model can recover; loop continues |
+| `HistoryCompactor::compact()` returns Err | `SseEvent::Data { type: "compaction", .. }` with `strategy: "truncate"`      | logged at `warn!`; falls through to raw truncation                                                                                                    |
+| `max_tool_rounds` reached                 | `SseEvent::Error { code: "max_tool_rounds", .. }`                            | outer loop breaks                                                                                                                                     |
 
 Every `Error` frame's `message` is a fixed sentence built in `types.rs` (`SseEvent::llm_error()`, `stream_error()`, `tool_error(tool)`, `max_tool_rounds()`). The failing `Error` itself goes to `tracing` and is never serialized to the client; `SseEvent::from_result` does the same for an `Err` item (`code: "internal"`).
 
@@ -105,13 +112,13 @@ Every `Error` frame's `message` is a fixed sentence built in `types.rs` (`SseEve
 
 Each `SseEvent` variant maps to a distinct SSE event type (via `to_sse_event`, feature `axum`):
 
-| `SseEvent` variant | SSE `event:` | `data:` payload |
-|---|---|---|
-| `Text { delta }` | `text` | raw string |
+| `SseEvent` variant                   | SSE `event:`  | `data:` payload                                                                |
+| ------------------------------------ | ------------- | ------------------------------------------------------------------------------ |
+| `Text { delta }`                     | `text`        | raw string                                                                     |
 | `ToolStatus { tool, status, label }` | `tool_status` | `{"tool": "<name>", "status": "calling"\|"done"\|"error", "label": "<text>"?}` |
-| `Data { type, payload }` | `data` | `{"type": "<type>", "payload": <json>}` |
-| `Error { code, message }` | `error` | `{"code": "<code>", "message": "<text>"}` |
-| `Done { session_id }` | `done` | `{"session_id": "<id>"}` |
+| `Data { type, payload }`             | `data`        | `{"type": "<type>", "payload": <json>}`                                        |
+| `Error { code, message }`            | `error`       | `{"code": "<code>", "message": "<text>"}`                                      |
+| `Done { session_id }`                | `done`        | `{"session_id": "<id>"}`                                                       |
 
 `label` is populated from the tool call's `doing` argument when the model supplies one, and omitted from the payload otherwise.
 

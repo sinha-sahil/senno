@@ -3,6 +3,7 @@ use crate::provider::LlmProvider;
 use crate::types as llm;
 use crate::types::{StreamChunk, Usage};
 use futures::Stream;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -55,7 +56,10 @@ impl AgentEngine {
             });
             session.usage.record_turn();
 
-            let tools = flow.tool_definitions();
+            let own = flow.tool_definitions();
+            let native: HashSet<String> = own.iter().map(|tool| tool.name.clone()).collect();
+            let sources = flow.tool_sources();
+            let tools = merged_tools(own, &sources);
             let system = flow.system_prompt();
             let model = self.config.model.clone();
             let params = self.config.params;
@@ -123,10 +127,16 @@ impl AgentEngine {
                                 label: label.clone(),
                             });
 
-                            let tool_output = match flow
-                                .execute_tool(&name, &arguments, session)
-                                .await
-                            {
+                            let source = sources
+                                .iter()
+                                .find(|source| !native.contains(&name) && source.handles(&name));
+
+                            let outcome = match source {
+                                Some(source) => source.invoke(&name, &arguments).await,
+                                None => flow.execute_tool(&name, &arguments, session).await,
+                            };
+
+                            let tool_output = match outcome {
                                 Ok(output) => output,
                                 Err(e) => {
                                     tracing::warn!(tool = %name, error = %e, "tool failed");
@@ -266,6 +276,25 @@ fn build_llm_request(
     }
 
     req
+}
+
+fn merged_tools(
+    mut tools: Vec<llm::ToolDefinition>,
+    sources: &[&dyn ToolSource],
+) -> Vec<llm::ToolDefinition> {
+    for source in sources {
+        for tool in source.definitions() {
+            if tools.iter().any(|kept| kept.name == tool.name) {
+                tracing::warn!(
+                    tool = %tool.name,
+                    "agent: the flow already serves this tool name, the source's copy is dropped",
+                );
+                continue;
+            }
+            tools.push(tool.clone());
+        }
+    }
+    tools
 }
 
 /// Result of a compaction / truncation pass. Returned so callers (e.g. the

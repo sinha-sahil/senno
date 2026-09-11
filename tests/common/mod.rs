@@ -16,6 +16,7 @@ pub const TOKEN_BODY: &str =
 
 #[derive(Debug, Clone)]
 pub struct CapturedRequest {
+    pub method: String,
     pub path: String,
     pub headers: HashMap<String, String>,
     pub body: String,
@@ -41,6 +42,8 @@ pub struct Reply {
     status: u16,
     body: String,
     delay: Duration,
+    headers: Vec<(String, String)>,
+    content_type: String,
 }
 
 impl Reply {
@@ -49,6 +52,8 @@ impl Reply {
             status: 200,
             body: body.into(),
             delay: Duration::ZERO,
+            headers: Vec::new(),
+            content_type: "application/json".to_string(),
         }
     }
 
@@ -57,12 +62,24 @@ impl Reply {
             status,
             body: body.into(),
             delay: Duration::ZERO,
+            headers: Vec::new(),
+            content_type: "application/json".to_string(),
         }
     }
 
     /// Hold the response back, so completion order can differ from request order.
     pub fn after(mut self, delay: Duration) -> Self {
         self.delay = delay;
+        self
+    }
+
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.content_type = content_type.into();
         self
     }
 }
@@ -131,9 +148,15 @@ where
         tokio::time::sleep(reply.delay).await;
     }
 
+    let extra: String = reply
+        .headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
     let response = format!(
-        "HTTP/1.1 {} STUB\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {} STUB\r\nContent-Type: {}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
         reply.status,
+        reply.content_type,
         reply.body.len(),
         reply.body
     );
@@ -157,13 +180,10 @@ async fn read_request(stream: &mut TcpStream) -> Option<CapturedRequest> {
 
     let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
     let mut lines = head.lines();
-    let path = lines
-        .next()
-        .unwrap_or_default()
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or_default()
-        .to_string();
+    let start_line = lines.next().unwrap_or_default();
+    let mut parts = start_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
 
     let mut headers = HashMap::new();
     for line in lines {
@@ -184,6 +204,7 @@ async fn read_request(stream: &mut TcpStream) -> Option<CapturedRequest> {
     }
 
     Some(CapturedRequest {
+        method,
         path,
         headers,
         body: String::from_utf8_lossy(&buf[head_end..]).into_owned(),
