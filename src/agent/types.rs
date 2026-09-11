@@ -1,6 +1,7 @@
 use crate::error::Error;
 use crate::types::{ToolDefinition, Usage};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -17,8 +18,24 @@ pub trait AgentFlow: Send + Sync {
     fn execute_tool<'a>(
         &'a self,
         name: &'a str,
-        args: &'a serde_json::Value,
+        args: &'a Value,
         session: &'a AgentSession,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, Error>> + Send + 'a>>;
+
+    fn tool_sources(&self) -> Vec<&dyn ToolSource> {
+        Vec::new()
+    }
+}
+
+pub trait ToolSource: Send + Sync {
+    fn definitions(&self) -> &[ToolDefinition];
+
+    fn handles(&self, name: &str) -> bool;
+
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        args: &'a Value,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, Error>> + Send + 'a>>;
 }
 

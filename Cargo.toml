@@ -28,6 +28,7 @@ default = []
 batch = ["dep:tokio"]
 vertex = ["dep:reqwest", "dep:jsonwebtoken", "dep:nanoid", "dep:tokio", "batch"]
 axum = ["dep:axum"]
+mcp = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -59,6 +60,10 @@ tokio = { version = "1.4.0", features = [
     "time",
     "fs",
 ] }
+
+[[example]]
+name = "mcp_flow"
+required-features = ["mcp", "vertex"]
 
 [package.metadata.docs.rs]
 all-features = true

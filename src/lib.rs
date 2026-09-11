@@ -14,11 +14,15 @@
 //!   [`run_embedding_batch`] — submit a batch job and poll it to completion.
 //! - `axum` feature: `agent::to_sse_event` — adapt agent events to
 //!   `axum::response::sse`.
+//! - `mcp` feature: [`mcp`] — register foreign MCP servers and add their tools
+//!   to any [`agent::AgentFlow`].
 
 pub mod agent;
 #[cfg(feature = "batch")]
 mod batch;
 pub mod error;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 mod one_shot;
 mod provider;
 pub mod providers;

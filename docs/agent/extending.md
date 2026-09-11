@@ -1,10 +1,11 @@
 # Extending
 
-Four plug points, in order of likelihood:
+Five plug points, in order of likelihood:
 
 | You want to | Plug into |
 |---|---|
 | Define agent behaviour (prompts, tools) | `impl AgentFlow` |
+| Add tools you did not write (MCP servers, a plugin registry) | `impl ToolSource`, returned from `AgentFlow::tool_sources` |
 | Swap the LLM backend (OpenAI, Bedrock, Ollama, local) | `impl LlmProvider` |
 | Replace default summarization (vector recall, server-side memory) | `impl HistoryCompactor` |
 | Surface custom UI events to the client | Return `ToolOutput::text(..).data(type, payload)` |
@@ -134,6 +135,46 @@ Key points:
 - **`ToolDefinition` is typed** — use the `ParameterSchema` builders; don't hand-write JSON Schema.
 - **`ToolOutput::text(..).data(..)` is dual-output** — `text` is what the LLM sees and reasons over; `data` reaches the client directly via `SseEvent::Data` for custom UI rendering. Use text-only for "facts for the model" and add data for "render this card in the UI."
 - **Session is read-only to tools.** Tools see `&AgentSession`, can read metadata/history for context, but mutation goes through `ToolOutput.session_metadata` which the engine merges.
+
+## Tools you did not write
+
+`tool_definitions` is for tools you implement. For tools that arrive from
+somewhere else — an MCP server, a plugin registry, a remote catalogue — implement
+`ToolSource` and name it in `tool_sources`. That method is defaulted to empty, so
+a flow that has none stays exactly as written above.
+
+```rust
+pub trait ToolSource: Send + Sync {
+    fn definitions(&self) -> &[ToolDefinition];
+    fn handles(&self, name: &str) -> bool;
+    fn invoke<'a>(&'a self, name: &'a str, args: &'a Value)
+        -> Pin<Box<dyn Future<Output = Result<ToolOutput, Error>> + Send + 'a>>;
+}
+```
+
+`McpToolset` (feature `mcp`) is one, so registering MCP servers is one method:
+
+```rust
+impl AgentFlow for ShoppingFlow {
+    fn tool_sources(&self) -> Vec<&dyn ToolSource> {
+        vec![&self.mcp]
+    }
+    // system_prompt, tool_definitions and execute_tool unchanged
+}
+```
+
+The engine does the rest:
+
+- **It offers your tools first**, then each source's, dropping any name you
+  already serve and warning about it. Model providers reject two tools of one
+  name, and your implementation wins the clash.
+- **It routes by ownership.** A name you did not declare in `tool_definitions`
+  goes to the first source whose `handles` claims it. Everything else goes to
+  `execute_tool`, so a source's tool never reaches your match arms and there is
+  no fallthrough to write.
+
+A source is a plain trait, so nothing about `senno::agent` depends on MCP — the
+`mcp` feature supplies an implementation, not a special case.
 
 ## Custom LLM backend
 

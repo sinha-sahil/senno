@@ -22,6 +22,7 @@ shipping its own.
 | `vertex` | `VertexClient`: Gemini + Anthropic (Claude) on Vertex AI. API-key auth (Gemini) or service-account auth (both), token caching, streaming SSE parsing, Gemini thinking-model `thoughtSignature` handling, Gemini text embeddings via `EmbeddingProvider`, async bulk generation and bulk embedding at half price via `BatchGenerationProvider` / `BatchEmbeddingProvider`. |
 | `batch` | `run_batch` / `run_embedding_batch` — submit a batch job and poll it to completion. Enabled by `vertex`. |
 | `axum` | `agent::to_sse_event` — map agent events straight into `axum::response::sse`. |
+| `mcp` | `mcp::{McpServer, McpToolset}` — register foreign [MCP](https://modelcontextprotocol.io) servers as a `ToolSource`; the engine offers their tools alongside your flow's own and routes calls to whichever owns the name. See [docs/mcp](docs/mcp/README.md). |
 
 ## Quick start
 

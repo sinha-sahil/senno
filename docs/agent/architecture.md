@@ -89,7 +89,7 @@ flowchart LR
 
     click AE href "#agentengine" "Orchestration loop. Holds Arc<dyn LlmProvider>, optional Arc<dyn HistoryCompactor>, AgentConfig. run(flow, &mut session, msg) returns Stream<Result<SseEvent, Error>>."
     click AC href "#agentconfig" "model (required), max_tool_rounds (default 5), max_history_messages (default 50). Built via .builder(model).build() → Result<AgentConfig, Error>."
-    click AF href "#agentflow" "Consumer trait. system_prompt() → String, tool_definitions() → Vec<ToolDefinition>, execute_tool(name, args, &AgentSession) → Future<Result<ToolOutput, Error>>."
+    click AF href "#agentflow" "Consumer trait. system_prompt() → String, tool_definitions() → Vec<ToolDefinition>, execute_tool(name, args, &AgentSession) → Future<Result<ToolOutput, Error>>, and a defaulted tool_sources() → Vec<&dyn ToolSource> for tools the flow did not write."
     click AS href "#agentsession" "Serializable session state: id, flow, messages, metadata, created_at, last_active. Consumer owns persistence."
     click CM href "#chatmessage" "Tagged enum for session: User{content} | Assistant{content} | ToolCall{id,name,args,thought_signature} | ToolResult{tool_call_id,name,content}."
     click TO href "#tooloutput" "Dual-output from a tool: content (fed back to LLM) + data (forwarded to client via SSE) + session_metadata (merged into AgentSession.metadata). Builder: text(c).data(type,payload).metadata(v)."
