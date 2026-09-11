@@ -3,6 +3,13 @@
 All notable changes to senno are documented here.
 
 
+## [0.6.0] - 2026-09-11
+
+### Features
+
+- Add mcp tool sources to the agent flow (f395caa)
+
+
 ## [0.5.1] - 2026-09-10
 
 ### Bug Fixes
