@@ -10,6 +10,8 @@
 //! - `vertex` feature: `providers::vertex` — Gemini and Claude on Vertex AI
 //!   with API-key or service-account auth, plus Gemini text embeddings and
 //!   Gemini Batch API bulk generation and bulk embedding at half price.
+//! - `litellm` feature: `providers::litellm` — LiteLLM's OpenAI-compatible
+//!   chat, streaming, tool-calling, and embeddings endpoints.
 //! - `batch` feature (implied by `vertex`): [`run_batch`] and
 //!   [`run_embedding_batch`] — submit a batch job and poll it to completion.
 //! - `axum` feature: `agent::to_sse_event` — adapt agent events to
