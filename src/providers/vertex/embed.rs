@@ -56,6 +56,11 @@ fn or_total_failure(response: EmbedResponse) -> Result<EmbedResponse, Error> {
 }
 
 pub(super) fn validate(request: &EmbedRequest) -> Result<(), Error> {
+    if !request.images.is_empty() {
+        return Err(Error::config(
+            "Vertex AI embeddings in senno are text-only; images need a multimodal provider such as Bedrock Titan Multimodal",
+        ));
+    }
     if request.title.is_some() && request.task_type != Some(EmbedTaskType::RetrievalDocument) {
         return Err(Error::config(
             "EmbedRequest::with_title is only accepted with EmbedTaskType::RetrievalDocument",

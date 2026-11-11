@@ -127,6 +127,7 @@ impl From<UsageMeta> for Usage {
         Usage {
             input_tokens: u.prompt_token_count,
             cached_input_tokens: u.cached_content_token_count,
+            cache_write_input_tokens: None,
             output_tokens: u.candidates_token_count,
             reasoning_tokens: u.thoughts_token_count,
             total_tokens: u.total_token_count,

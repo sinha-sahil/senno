@@ -87,6 +87,7 @@ fn usage(input: u32, output: u32, reasoning: u32, total: u32) -> Usage {
     Usage {
         input_tokens: Some(input),
         cached_input_tokens: None,
+        cache_write_input_tokens: None,
         output_tokens: Some(output),
         reasoning_tokens: Some(reasoning),
         total_tokens: Some(total),

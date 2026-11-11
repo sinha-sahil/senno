@@ -201,6 +201,7 @@ async fn a_metered_turn_bills_the_session_and_the_done_frame_names_only_the_sess
     let usage = Usage {
         input_tokens: Some(100),
         cached_input_tokens: None,
+        cache_write_input_tokens: None,
         output_tokens: Some(20),
         reasoning_tokens: Some(30),
         total_tokens: Some(150),

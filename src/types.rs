@@ -255,8 +255,14 @@ impl GenerateResponse {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Usage {
+    /// All prompt tokens, cache reads and cache writes included.
     pub input_tokens: Option<u32>,
+    /// The part of `input_tokens` served from the provider's prompt cache.
     pub cached_input_tokens: Option<u32>,
+    /// The part of `input_tokens` written into the provider's prompt cache.
+    /// Bedrock counts these against quota; providers without prompt caching
+    /// report `None`.
+    pub cache_write_input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
     pub reasoning_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
@@ -283,10 +289,28 @@ pub enum StreamChunk {
 pub struct EmbedRequest {
     pub model: String,
     pub texts: Vec<String>,
+    /// Images to embed, for multimodal models (Titan Multimodal on Bedrock).
+    /// Item `i` of the request is `texts[i]` and/or `images[i]`: with both
+    /// lists non-empty they must be the same length, and each text is embedded
+    /// together with its image. Providers without image support reject a
+    /// request that carries any.
+    pub images: Vec<EmbedImage>,
     pub task_type: Option<EmbedTaskType>,
     pub output_dimensionality: Option<u32>,
     pub title: Option<String>,
     pub api: Option<EmbedApi>,
+}
+
+/// Raw image bytes (PNG or JPEG) to embed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedImage {
+    pub data: Vec<u8>,
+}
+
+impl EmbedImage {
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
+        Self { data: data.into() }
+    }
 }
 
 /// Vertex serves embeddings through two disjoint APIs, and a model speaks exactly one of them.
@@ -308,6 +332,7 @@ impl EmbedRequest {
         Self {
             model: model.into(),
             texts: texts.into_iter().map(|t| t.into()).collect(),
+            images: Vec::new(),
             task_type: None,
             output_dimensionality: None,
             title: None,
@@ -317,6 +342,25 @@ impl EmbedRequest {
 
     pub fn single(model: impl Into<String>, text: impl Into<String>) -> Self {
         Self::new(model, [text.into()])
+    }
+
+    /// Images only, one embedding per image.
+    pub fn from_images(
+        model: impl Into<String>,
+        images: impl IntoIterator<Item = EmbedImage>,
+    ) -> Self {
+        Self::new(model, Vec::<String>::new()).with_images(images)
+    }
+
+    /// Attach images; see [`EmbedRequest::images`] for how they pair with texts.
+    pub fn with_images(mut self, images: impl IntoIterator<Item = EmbedImage>) -> Self {
+        self.images = images.into_iter().collect();
+        self
+    }
+
+    /// Number of embeddings the request asks for.
+    pub fn item_count(&self) -> usize {
+        self.texts.len().max(self.images.len())
     }
 
     pub fn with_task_type(mut self, v: EmbedTaskType) -> Self {

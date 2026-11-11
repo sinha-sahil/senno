@@ -105,6 +105,9 @@ pub struct TokenUsage {
     pub unmetered_calls: u32,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
+    /// Absent from sessions saved before this field existed.
+    #[serde(default)]
+    pub cache_write_input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub total_tokens: u64,
@@ -136,6 +139,9 @@ impl TokenUsage {
         self.cached_input_tokens = self
             .cached_input_tokens
             .saturating_add(u64::from(u.cached_input_tokens.unwrap_or(0)));
+        self.cache_write_input_tokens = self
+            .cache_write_input_tokens
+            .saturating_add(u64::from(u.cache_write_input_tokens.unwrap_or(0)));
         self.output_tokens = self.output_tokens.saturating_add(output);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(reasoning);
         self.total_tokens = self.total_tokens.saturating_add(total);
@@ -293,6 +299,7 @@ mod tests {
             reasoning_tokens: thoughts,
             total_tokens: total,
             cached_input_tokens: None,
+            cache_write_input_tokens: None,
         }
     }
 

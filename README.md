@@ -22,6 +22,7 @@ shipping its own.
 | `vertex` | `VertexClient`: Gemini + Anthropic (Claude) on Vertex AI. API-key auth (Gemini) or service-account auth (both), token caching, streaming SSE parsing, Gemini thinking-model `thoughtSignature` handling, Gemini text embeddings via `EmbeddingProvider`, async bulk generation and bulk embedding at half price via `BatchGenerationProvider` / `BatchEmbeddingProvider`. |
 | `batch` | `run_batch` / `run_embedding_batch` — submit a batch job and poll it to completion. Enabled by `vertex`. |
 | `axum` | `agent::to_sse_event` — map agent events straight into `axum::response::sse`. |
+| `bedrock` | `BedrockClient`: Amazon Bedrock. Chat through the Converse API (Claude, GPT and any other Converse model) with tools, streaming, token usage and an optional Bedrock Guardrail on every call; Titan embeddings (Text v1/v2 and Multimodal G1, text and/or image) via `EmbeddingProvider`. Credentials from the AWS default chain, so IRSA on EKS needs no keys. |
 | `mcp` | `mcp::{McpServer, McpToolset}` — register foreign [MCP](https://modelcontextprotocol.io) servers as a `ToolSource`; the engine offers their tools alongside your flow's own and routes calls to whichever owns the name. See [docs/mcp](docs/mcp/README.md). |
 
 ## Quick start
@@ -221,6 +222,51 @@ rounds, session state, and — when history exceeds your configured limit —
 compacts older turns into an LLM-written summary at a safe message boundary
 (tool-call/result pairs are never split; on compactor failure it degrades to
 plain truncation).
+
+### Amazon Bedrock (feature `bedrock`)
+
+```rust
+use senno::providers::bedrock::{BedrockConfig, BedrockGuardrail, get_bedrock_client};
+use senno::{EmbedImage, EmbedRequest, EmbeddingProvider, GenerateRequest, one_shot};
+
+// Region from BEDROCK_REGION / AWS_REGION; credentials from the AWS default
+// chain (IRSA web identity on EKS, instance role, profile).
+let client = get_bedrock_client(Some(
+    BedrockConfig::default()
+        .with_region("eu-central-1")
+        .with_guardrail(BedrockGuardrail::new("gr-abc123", "1")),
+))
+.await?;
+
+let resp = one_shot(
+    &client,
+    &GenerateRequest::one_shot("anthropic.claude-sonnet-5", "You are terse.", "Hi")
+        .with_max_tokens(512),
+)
+.await?;
+
+// Titan Multimodal: text and image share one vector space.
+let vectors = client
+    .embed(
+        &EmbedRequest::new("amazon.titan-embed-image-v1", ["red running shoe"])
+            .with_images([EmbedImage::new(std::fs::read("shoe.jpg")?)])
+            .with_output_dimensionality(1024),
+    )
+    .await?;
+```
+
+`BedrockClient` implements `LlmProvider`, so it drops into `get_agent_engine`
+unchanged. Notes:
+
+- Always set `max_tokens`: Bedrock reserves `input + max_tokens` against the
+  model's tokens-per-minute quota at the start of every call.
+- Throttling, model-not-ready and transient server errors are retried by the
+  AWS SDK (3 attempts by default, `with_max_attempts`) and then surface as
+  retryable `senno::Error`s; validation and access errors are permanent.
+- Token usage maps cache reads to `cached_input_tokens` and cache writes to
+  `cache_write_input_tokens`; both are included in `input_tokens`.
+- Not yet supported on Bedrock: `thinking_budget` (ignored with a warning) and
+  images inside chat messages (needs a new `ContentPart` variant).
 
 ## Errors
 

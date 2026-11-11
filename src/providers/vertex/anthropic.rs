@@ -90,6 +90,7 @@ impl From<WireUsage> for Usage {
         Usage {
             input_tokens: input,
             cached_input_tokens: u.cache_read_input_tokens,
+            cache_write_input_tokens: u.cache_creation_input_tokens,
             output_tokens: u.output_tokens,
             reasoning_tokens: None,
             total_tokens: sum_opt(input, u.output_tokens),
@@ -111,6 +112,7 @@ fn merge_usage(prev: Option<Usage>, next: Usage) -> Usage {
     Usage {
         input_tokens,
         cached_input_tokens: next.cached_input_tokens.or(p.cached_input_tokens),
+        cache_write_input_tokens: next.cache_write_input_tokens.or(p.cache_write_input_tokens),
         output_tokens,
         reasoning_tokens: None,
         total_tokens: sum_opt(input_tokens, output_tokens),
